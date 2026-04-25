@@ -24,6 +24,7 @@ import (
 	"github.com/alvarorichard/Goanime/internal/api"
 	"github.com/alvarorichard/Goanime/internal/downloader/hls"
 	"github.com/alvarorichard/Goanime/internal/models"
+	"github.com/alvarorichard/Goanime/internal/scraper"
 	"github.com/alvarorichard/Goanime/internal/tui"
 	"github.com/alvarorichard/Goanime/internal/util"
 	"github.com/ktr0731/go-fuzzyfinder"
@@ -32,8 +33,9 @@ import (
 
 // Pre-compiled regexes for download quality parsing
 var (
-	digitsRe        = regexp.MustCompile(`\d+`)
-	resolutionMp4Re = regexp.MustCompile(`(\d{3,4})p?\.mp4`)
+	digitsRe               = regexp.MustCompile(`\d+`)
+	resolutionMp4Re        = regexp.MustCompile(`(\d{3,4})p?\.mp4`)
+	downloadPartRetryDelay = 500 * time.Millisecond
 )
 
 // downloadPart downloads a part of the video file using HTTP Range Requests.
@@ -64,7 +66,7 @@ func downloadPart(url string, from, to int64, part int, client *http.Client, des
 		}
 		if attempt > 0 {
 			util.Debugf("Download part %d: resuming at byte %d (attempt %d)", part, current, attempt+1)
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(downloadPartRetryDelay)
 		}
 
 		beforeRead := current
@@ -74,6 +76,9 @@ func downloadPart(url string, from, to int64, part int, client *http.Client, des
 			return err
 		}
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", current, to))
+		if strings.Contains(url, "allanime.day") || strings.Contains(url, "allanime.pro") {
+			req.Header.Set("Referer", "https://allanime.to")
+		}
 
 		resp, err := client.Do(req) // #nosec G704
 		if err != nil {
@@ -83,10 +88,15 @@ func downloadPart(url string, from, to int64, part int, client *http.Client, des
 		}
 
 		if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+			statusCode := resp.StatusCode
+			status := resp.Status
 			if cErr := resp.Body.Close(); cErr != nil {
 				util.Logger.Warn("Error closing response body", "error", cErr)
 			}
-			util.Debugf("Download part %d: unexpected status %d", part, resp.StatusCode)
+			if statusCode == http.StatusForbidden || statusCode == http.StatusNotFound {
+				return scraper.NewDownloadExpiredError("Download", "http-range", statusCode, fmt.Errorf("HTTP %d: %s", statusCode, status))
+			}
+			util.Debugf("Download part %d: unexpected status %d", part, statusCode)
 			staleRetries++
 			continue
 		}
@@ -374,6 +384,11 @@ type directDownloadFunc func(string, string, *model) error
 type fallbackResolveFunc func(string, string) (string, error)
 
 func downloadAnimeFireDirectWithFallback(videoAPIURL, videoURL, path string, m *model) error {
+	// lightspeedst.net (AnimeFire CDN) requires Referer: https://animefire.io to authorise
+	// token-signed requests. Ensure it is set before the download client sends any request.
+	if util.GetGlobalReferer() == "" {
+		util.SetGlobalReferer("https://animefire.io")
+	}
 	return runAnimeFireDirectDownloadWithFallback(
 		videoAPIURL,
 		videoURL,
@@ -1009,6 +1024,9 @@ func downloadDirectHTTPWithClient(videoURL, path string, m *model, client *http.
 	}()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+			return scraper.NewDownloadExpiredError("Download", "http", resp.StatusCode, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status))
+		}
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
 

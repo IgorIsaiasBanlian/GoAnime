@@ -2,6 +2,7 @@ package player
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,13 +12,21 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"charm.land/log/v2"
 	"github.com/alvarorichard/Goanime/internal/models"
+	"github.com/alvarorichard/Goanime/internal/scraper"
 	"github.com/alvarorichard/Goanime/internal/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
 
 func TestDownloadDirectHTTPWithClientDownloadsMockVideoAndTracksProgress(t *testing.T) {
 	payload := bytes.Repeat([]byte("goanime-video-payload"), 32*1024)
@@ -52,6 +61,228 @@ func TestDownloadDirectHTTPWithClientDownloadsMockVideoAndTracksProgress(t *test
 	assert.Equal(t, int64(len(payload)), received)
 }
 
+func TestDownloadPartAddsAllAnimeReferer(t *testing.T) {
+	payload := []byte("goanime")
+	var gotReferer string
+	var gotRange string
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gotReferer = req.Header.Get("Referer")
+			gotRange = req.Header.Get("Range")
+
+			return &http.Response{
+				StatusCode: http.StatusPartialContent,
+				Status:     "206 Partial Content",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(bytes.NewReader(payload)),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	outPath := filepath.Join(t.TempDir(), "episode.mp4")
+	err := downloadPart(
+		"https://allanime.day/video/episode.mp4",
+		0,
+		int64(len(payload)-1),
+		0,
+		client,
+		outPath,
+		&model{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "https://allanime.to", gotReferer)
+	assert.Equal(t, "bytes=0-6", gotRange)
+
+	got, err := os.ReadFile(outPath + ".part0")
+	require.NoError(t, err)
+	assert.Equal(t, payload, got)
+}
+
+func TestDownloadPartStopsAfterRepeatedRequestErrors(t *testing.T) {
+	restore := setDownloadPartRetryDelayForTest(0)
+	defer restore()
+
+	var attempts int
+	client := &http.Client{
+		Transport: roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+			attempts++
+			return nil, errors.New("temporary network failure")
+		}),
+	}
+
+	err := downloadPart(
+		"https://allanime.day/video/episode.mp4",
+		0,
+		6,
+		0,
+		client,
+		filepath.Join(t.TempDir(), "episode.mp4"),
+		&model{},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max retries (20) exceeded")
+	assert.Equal(t, 20, attempts)
+}
+
+func TestDownloadPartStopsAfterRepeatedHTTPStatusWithoutProgress(t *testing.T) {
+	restore := setDownloadPartRetryDelayForTest(0)
+	defer restore()
+
+	var attempts int
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			return &http.Response{
+				StatusCode: http.StatusServiceUnavailable,
+				Status:     "503 Service Unavailable",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("source unavailable")),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	err := downloadPart(
+		"https://allanime.day/video/episode.mp4",
+		0,
+		6,
+		0,
+		client,
+		filepath.Join(t.TempDir(), "episode.mp4"),
+		&model{},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "max retries (20) exceeded")
+	assert.Equal(t, 20, attempts)
+}
+
+func setDownloadPartRetryDelayForTest(delay time.Duration) func() {
+	original := downloadPartRetryDelay
+	downloadPartRetryDelay = delay
+	return func() {
+		downloadPartRetryDelay = original
+	}
+}
+
+func TestGetContentLengthAddsAllAnimeReferer(t *testing.T) {
+	const contentLength = "12345"
+	var gotMethod string
+	var gotReferer string
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gotMethod = req.Method
+			gotReferer = req.Header.Get("Referer")
+
+			header := make(http.Header)
+			header.Set("Content-Length", contentLength)
+
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Status:     "200 OK",
+				Header:     header,
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	got, err := getContentLength("https://allanime.day/video/episode.mp4", client)
+	require.NoError(t, err)
+	assert.Equal(t, int64(12345), got)
+	assert.Equal(t, http.MethodHead, gotMethod)
+	assert.Equal(t, "https://allanime.to", gotReferer)
+}
+
+func TestGetContentLengthFallbackKeepsAllAnimeReferer(t *testing.T) {
+	var gotRequests []string
+	var gotReferers []string
+	var gotRanges []string
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gotRequests = append(gotRequests, req.Method)
+			gotReferers = append(gotReferers, req.Header.Get("Referer"))
+			gotRanges = append(gotRanges, req.Header.Get("Range"))
+
+			if req.Method == http.MethodHead {
+				return &http.Response{
+					StatusCode: http.StatusMethodNotAllowed,
+					Status:     "405 Method Not Allowed",
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader("")),
+					Request:    req,
+				}, nil
+			}
+
+			header := make(http.Header)
+			header.Set("Content-Length", "1")
+
+			return &http.Response{
+				StatusCode: http.StatusPartialContent,
+				Status:     "206 Partial Content",
+				Header:     header,
+				Body:       io.NopCloser(strings.NewReader("x")),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	got, err := getContentLength("https://allanime.pro/video/episode.mp4", client)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), got)
+	assert.Equal(t, []string{http.MethodHead, http.MethodGet}, gotRequests)
+	assert.Equal(t, []string{"https://allanime.to", "https://allanime.to"}, gotReferers)
+	assert.Equal(t, []string{"", "bytes=0-0"}, gotRanges)
+}
+
+func TestDownloadAnimeFireDirectWithFallbackSetsDefaultReferer(t *testing.T) {
+	restore := snapshotGlobalReferer()
+	defer restore()
+	util.ClearGlobalReferer()
+
+	err := downloadAnimeFireDirectWithFallback(
+		"https://animefire.io/video/show/20",
+		"://invalid-download-url",
+		filepath.Join(t.TempDir(), "episode.mp4"),
+		&model{},
+	)
+
+	require.Error(t, err)
+	assert.Equal(t, "https://animefire.io", util.GetGlobalReferer())
+}
+
+func TestDownloadAnimeFireDirectWithFallbackKeepsExistingReferer(t *testing.T) {
+	restore := snapshotGlobalReferer()
+	defer restore()
+	util.SetGlobalReferer("https://custom.example")
+
+	err := downloadAnimeFireDirectWithFallback(
+		"https://animefire.io/video/show/20",
+		"://invalid-download-url",
+		filepath.Join(t.TempDir(), "episode.mp4"),
+		&model{},
+	)
+
+	require.Error(t, err)
+	assert.Equal(t, "https://custom.example", util.GetGlobalReferer())
+}
+
+func snapshotGlobalReferer() func() {
+	referer := util.GetGlobalReferer()
+	return func() {
+		if referer == "" {
+			util.ClearGlobalReferer()
+			return
+		}
+		util.SetGlobalReferer(referer)
+	}
+}
+
 func TestDownloadDirectHTTPWithClientReturnsHTTPStatusErrorFromMockCDN(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "missing object", http.StatusNotFound)
@@ -66,6 +297,9 @@ func TestDownloadDirectHTTPWithClientReturnsHTTPStatusErrorFromMockCDN(t *testin
 	err := downloadDirectHTTPWithClient(server.URL+"/missing.mp4", outPath, &model{}, server.Client())
 	require.Error(t, err)
 	assert.True(t, isHTTPStatusError(err, http.StatusNotFound), "error should be recognized as HTTP 404: %v", err)
+	diagnostic := scraper.DiagnoseError("Download", "http", err)
+	require.NotNil(t, diagnostic)
+	assert.Equal(t, scraper.DiagnosticDownloadExpired, diagnostic.Kind)
 
 	_, statErr := os.Stat(outPath)
 	assert.True(t, os.IsNotExist(statErr), "404 response must not create a completed file")
