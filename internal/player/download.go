@@ -38,6 +38,46 @@ var (
 	downloadPartRetryDelay = 500 * time.Millisecond
 )
 
+// downloadUserAgent mirrors the browser User-Agent that AnimeFire's CDN
+// (lightspeedst.net) and other token-protected origins expect. Using the
+// default Go transport UA causes some CDNs to return HTTP 401.
+const downloadUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+// applyDownloadAuthHeaders sets the Referer / User-Agent headers required by
+// origin-protected CDNs (AnimeFire's lightspeedst.net, AllAnime, etc.) onto a
+// download request. It prefers the per-source referer stored in
+// util.GetGlobalReferer (set by the scraper / api layer) and falls back to
+// hardcoded values for known hosts so legacy paths keep working even when the
+// referer was never set.
+func applyDownloadAuthHeaders(req *http.Request, url string) {
+	if req == nil {
+		return
+	}
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", downloadUserAgent)
+	}
+
+	if ref := util.GetGlobalReferer(); ref != "" {
+		req.Header.Set("Referer", ref)
+		origin := strings.TrimSuffix(ref, "/")
+		if u, err := neturl.Parse(origin); err == nil && u.Scheme != "" && u.Host != "" {
+			origin = u.Scheme + "://" + u.Host
+		}
+		if req.Header.Get("Origin") == "" {
+			req.Header.Set("Origin", origin)
+		}
+		return
+	}
+
+	switch {
+	case strings.Contains(url, "allanime.day"), strings.Contains(url, "allanime.pro"):
+		req.Header.Set("Referer", "https://allanime.to")
+	case strings.Contains(url, "lightspeedst.net"), strings.Contains(url, "animefire"):
+		req.Header.Set("Referer", "https://animefire.io")
+		req.Header.Set("Origin", "https://animefire.io")
+	}
+}
+
 // downloadPart downloads a part of the video file using HTTP Range Requests.
 // Automatically retries with resume on connection drops (up to 20 stale retries).
 func downloadPart(url string, from, to int64, part int, client *http.Client, destPath string, m *model) error {
@@ -76,9 +116,7 @@ func downloadPart(url string, from, to int64, part int, client *http.Client, des
 			return err
 		}
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", current, to))
-		if strings.Contains(url, "allanime.day") || strings.Contains(url, "allanime.pro") {
-			req.Header.Set("Referer", "https://allanime.to")
-		}
+		applyDownloadAuthHeaders(req, url)
 
 		resp, err := client.Do(req) // #nosec G704
 		if err != nil {

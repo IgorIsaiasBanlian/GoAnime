@@ -97,9 +97,7 @@ func getContentLength(url string, client *http.Client) (int64, error) {
 		// Returns 0 and the error if the request creation fails.
 		return 0, err
 	}
-	if strings.Contains(url, "allanime.day") || strings.Contains(url, "allanime.pro") {
-		req.Header.Set("Referer", "https://allanime.to")
-	}
+	applyDownloadAuthHeaders(req, url)
 
 	// Sends the HEAD request to the server.
 	resp, err := client.Do(req) // #nosec G704
@@ -1116,6 +1114,15 @@ func extractActualVideoURL(videoSrc string) (string, error) {
 	if isAnimeFire {
 		if util.IsDebug {
 			util.Debugf("Found animefire.io video URL, fetching content...")
+		}
+
+		// lightspeedst.net (AnimeFire CDN) requires Referer: https://animefire.io to authorise
+		// token-signed requests. Without it, mpv/yt-dlp get HTTP 401 Unauthorized while the
+		// browser (which sends the referer automatically) plays the same URL fine. Set it
+		// here so appendPlaybackRefererArgs propagates it to mpv on the play path, mirroring
+		// the existing download.go logic.
+		if util.GetGlobalReferer() == "" {
+			util.SetGlobalReferer("https://animefire.io")
 		}
 
 		// Fetch the video page
