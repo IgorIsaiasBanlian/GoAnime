@@ -80,6 +80,7 @@ func HandleMovie(anime *models.Anime, episodes []models.Episode, discordEnabled 
 			anime.URL,
 			episodes[0].Number,
 			anime.MalID,
+			anime.AnilistID,
 			updater,
 			anime.Name,
 			anime.CurrentSeason,

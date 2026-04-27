@@ -712,6 +712,7 @@ func HandleDownloadAndPlay(
 	animeURL string,
 	episodeNumberStr string,
 	animeMalID int,
+	animeAnilistID int,
 	updater *discord.RichPresenceUpdater,
 	animeName string,
 	animeSeason int,
@@ -754,6 +755,7 @@ func HandleDownloadAndPlay(
 				animeURL,
 				episodeNumberStr,
 				animeMalID,
+				animeAnilistID,
 				updater,
 			)
 			if err != nil {
@@ -854,6 +856,7 @@ func HandleDownloadAndPlay(
 				episodes,
 				selectedEpisodeNum,
 				animeMalID,
+				animeAnilistID,
 				updater,
 			)
 			if err != nil {
@@ -873,7 +876,8 @@ func downloadAndPlayEpisode(
 	selectedEpisodeNum int,
 	animeURL string,
 	episodeNumberStr string,
-	animeMalID int, // Added animeMalID parameter
+	animeMalID int,
+	animeAnilistID int,
 	updater *discord.RichPresenceUpdater,
 ) error {
 	// Check if video URL is valid
@@ -1217,13 +1221,13 @@ func downloadAndPlayEpisode(
 				if removeErr := os.Remove(episodePath); removeErr != nil {
 					util.Warnf("Failed to remove invalid file: %v", removeErr)
 				}
-				return downloadAndPlayEpisode(videoURL, episodes, selectedEpisodeNum, animeURL, episodeNumberStr, animeMalID, updater)
+				return downloadAndPlayEpisode(videoURL, episodes, selectedEpisodeNum, animeURL, episodeNumberStr, animeMalID, animeAnilistID, updater)
 			}
 		}
 	}
 
 	if askForPlayOffline() {
-		if err := playVideo(episodePath, episodes, selectedEpisodeNum, animeMalID, updater); err != nil {
+		if err := playVideo(episodePath, episodes, selectedEpisodeNum, animeMalID, animeAnilistID, updater); err != nil {
 			return err
 		}
 		return nil

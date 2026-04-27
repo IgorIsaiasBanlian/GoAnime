@@ -2118,8 +2118,8 @@ func handleExistingEpisodes(episodes []models.Episode, animeURL string, startNum
 
 	// Play the episode using the existing player logic
 	// Note: We use the local file path as the video URL since it's already downloaded
-	// anilistID set to 0 since we don't have that context here, updater set to nil
-	return playVideo(episodePath, episodes, episodeNum, 0, nil)
+	// IDs set to 0 since we don't have that context here, updater set to nil
+	return playVideo(episodePath, episodes, episodeNum, 0, 0, nil)
 }
 
 // askAndPlayDownloadedEpisode asks the user which episode from the downloaded range they want to play
@@ -2202,6 +2202,6 @@ func askAndPlayDownloadedEpisode(episodes []models.Episode, animeURL string, sta
 
 	// Play the episode using the existing player logic
 	// Note: We use the local file path as the video URL since it's already downloaded
-	// anilistID set to 0 since we don't have that context here, updater set to nil
-	return playVideo(episodePath, episodes, episodeNum, 0, nil)
+	// IDs set to 0 since we don't have that context here, updater set to nil
+	return playVideo(episodePath, episodes, episodeNum, 0, 0, nil)
 }

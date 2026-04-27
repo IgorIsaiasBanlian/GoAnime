@@ -152,6 +152,7 @@ func PlayEpisode(
 		anime.URL,
 		episodeNumberStr,
 		anime.MalID,
+		anime.AnilistID,
 		updater,
 		anime.Name,
 		anime.CurrentSeason,
