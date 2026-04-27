@@ -59,7 +59,7 @@ const (
 // ---------------------------------------------------------------------------
 func parseBatchexecuteResponseLegacy(body []byte) (string, error) {
 	var videoURL string
-	for _, line := range strings.Split(string(body), "\n") {
+	for line := range strings.SplitSeq(string(body), "\n") {
 		if !strings.Contains(line, "wrb.fr") {
 			continue
 		}

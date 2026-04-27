@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,12 +13,13 @@ import (
 )
 
 func episodePageFixture(sources []struct{ src, quality string }) string {
-	body := `<html><head><title>Anime Episode</title></head><body>`
+	var body strings.Builder
+	body.WriteString(`<html><head><title>Anime Episode</title></head><body>`)
 	for _, s := range sources {
-		body += fmt.Sprintf(`<div data-video-src="%s" data-quality="%s"></div>`, s.src, s.quality)
+		fmt.Fprintf(&body, `<div data-video-src="%s" data-quality="%s"></div>`, s.src, s.quality)
 	}
-	body += `</body></html>`
-	return body
+	body.WriteString(`</body></html>`)
+	return body.String()
 }
 
 func TestAnimefireGetEpisodeStreamURLSelectsHighestQuality(t *testing.T) {

@@ -541,7 +541,7 @@ func TestDecodeToBeParsedLargePayload(t *testing.T) {
 	t.Parallel()
 	// Build a payload with 100 source URLs
 	var entries []string
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		entries = append(entries, fmt.Sprintf(`{"sourceUrl":"--0809","sourceName":"P%d"}`, i))
 	}
 	plaintext := `{"data":{"episode":{"sourceUrls":[` + strings.Join(entries, ",") + `]}}}`
@@ -1589,15 +1589,13 @@ func TestProcessSourceURLsConcurrentRaceSafety(t *testing.T) {
 	client := newTestClient(server.URL)
 	// Run multiple concurrent calls
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 10 {
+		wg.Go(func() {
 			_, _, _ = client.processSourceURLsConcurrent(
 				[]string{server.URL + "/a", server.URL + "/b", server.URL + "/c"},
 				"best", "anime-id", "1",
 			)
-		}()
+		})
 	}
 	wg.Wait() // If there's a race, -race detector will catch it
 }
@@ -1828,7 +1826,7 @@ func TestGetEpisodeURLConcurrentCalls(t *testing.T) {
 	client := newTestClient(apiServer.URL)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		wg.Add(1)
 		go func(ep int) {
 			defer wg.Done()
