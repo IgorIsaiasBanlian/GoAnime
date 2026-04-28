@@ -422,4 +422,3 @@ func TestApplyDownloadAuthHeaders_NilRequestIsNoop(t *testing.T) {
 		applyDownloadAuthHeaders(nil, "https://lightspeedst.net/x")
 	})
 }
-

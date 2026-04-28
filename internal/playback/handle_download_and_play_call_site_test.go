@@ -21,8 +21,8 @@ import (
 // downstream, and would silently restore the original failure mode.
 //
 // This test parses the two call sites in the playback package and asserts:
-//   1. positional index 5 (the 6th argument) reads field MalID, and
-//   2. positional index 6 (the 7th argument) reads field AnilistID.
+//  1. positional index 5 (the 6th argument) reads field MalID, and
+//  2. positional index 6 (the 7th argument) reads field AnilistID.
 //
 // If either invariant breaks, the test fails with a precise message.
 func TestHandleDownloadAndPlay_CallSites_PassDistinctIDFields(t *testing.T) {
