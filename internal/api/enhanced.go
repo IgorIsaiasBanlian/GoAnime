@@ -777,6 +777,9 @@ func GetFlixHQEpisodes(media *models.Anime) ([]models.Episode, error) {
 		return seasons[i].Title
 	}, fuzzyfinder.WithPromptString("Select season: "))
 	if err != nil {
+		if errors.Is(err, fuzzyfinder.ErrAbort) {
+			return nil, ErrBackToSearch
+		}
 		return nil, fmt.Errorf("season selection cancelled: %w", err)
 	}
 
@@ -1036,6 +1039,9 @@ func GetSuperFlixEpisodes(media *models.Anime) ([]models.Episode, error) {
 		return seasonLabels[i]
 	}, fuzzyfinder.WithPromptString("Select season: "))
 	if err != nil {
+		if errors.Is(err, fuzzyfinder.ErrAbort) {
+			return nil, ErrBackToSearch
+		}
 		return nil, fmt.Errorf("season selection cancelled: %w", err)
 	}
 

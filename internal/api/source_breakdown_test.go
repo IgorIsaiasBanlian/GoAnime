@@ -1,5 +1,30 @@
 package api
 
+// Regression suite for the "Source breakdown" diagnostic bug.
+//
+// Discovered:  2026-04-26 — user-supplied debug log
+//              ("===== GoAnime Debug Session — 2026-04-26 18:19:11 =====")
+//              showed `Source breakdown AnimeFire=0` while the same session
+//              logged `Search results received source=Animefire.io count=10`.
+// Fixed:       2026-04-28 — commit 39f17db
+//              ("feat: refactor source breakdown logic for case-insensitive
+//              matching and add corresponding tests").
+// Root cause:  strings.Contains in Go is byte-exact. The breakdown predicate
+//              in internal/api/enhanced.go searched for the substring
+//              "AnimeFire" (capital F), but the scraper emits the canonical
+//              source string "Animefire.io" (lowercase f) at
+//              internal/scraper/unified.go:454. The two never matched, so the
+//              counter stayed at 0 regardless of how many results came back.
+// Blast radius:diagnostic-only — the player still worked because routing
+//              elsewhere already used strings.ToLower (enhanced.go:449) or
+//              hit the [PT-BR] tag fallback. The Goyabu reproduction in the
+//              report confirmed playback was healthy. The bug only made the
+//              "Source breakdown" log line lie to operators.
+//
+// The tests below pin the fix in place: if anyone ever reverts the
+// case-insensitive matching or drops Goyabu from the breakdown again, these
+// will fail loudly.
+
 import (
 	"strings"
 	"testing"

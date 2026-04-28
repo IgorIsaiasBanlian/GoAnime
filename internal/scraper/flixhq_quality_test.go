@@ -16,7 +16,7 @@ func isFlixHQUnavailable(err error) bool {
 		return true
 	}
 
-	msg := err.Error()
+	msg := strings.ToLower(err.Error())
 	transient := []string{
 		"source unavailable",
 		"server returned: 521",
@@ -24,15 +24,17 @@ func isFlixHQUnavailable(err error) bool {
 		"unexpected status code: 521",
 		"context deadline exceeded",
 		"context canceled",
+		"request canceled",
+		"client.timeout",
 		"timeout",
 		"connection refused",
 		"no such host",
 		"i/o timeout",
-		"TLS handshake timeout",
+		"tls handshake timeout",
 		"500", "502", "503", "521", "530", "405",
-		"Bad Gateway",
-		"Method Not Allowed",
-		"both APIs failed",
+		"bad gateway",
+		"method not allowed",
+		"both apis failed",
 		"no server found",
 	}
 	for _, s := range transient {
@@ -41,6 +43,46 @@ func isFlixHQUnavailable(err error) bool {
 		}
 	}
 	return false
+}
+
+// TestIsFlixHQUnavailable_SurfTimeoutFromCI is a regression test for a CI
+// flake observed on 2026-04-28: the surf-wrapped HTTP client returned
+// `request canceled while waiting for connection (Client.Timeout exceeded
+// while awaiting headers)` after both HTTP/2 and HTTP/1.1 attempts failed.
+// The original substring list missed it because matching was case-sensitive
+// ("Timeout" vs "timeout") and "request canceled" wasn't listed, so
+// TestFlixHQClient_SearchMedia/Search_for_TV_show failed instead of skipping
+// when flixhq.to was unreachable.
+func TestIsFlixHQUnavailable_SurfTimeoutFromCI(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "surf HTTP/2 then HTTP/1.1 timeout (run 25031539884)",
+			err: errors.New(
+				`failed to make request: Get "https://flixhq.to/search/breaking-bad": ` +
+					`surf: HTTP/2 request failed: net/http: request canceled; ` +
+					`HTTP/1.1 fallback failed: net/http: request canceled while waiting for connection ` +
+					`(Client.Timeout exceeded while awaiting headers)`,
+			),
+		},
+		{
+			name: "Client.Timeout alone (capital T)",
+			err:  errors.New(`Get "https://flixhq.to": Client.Timeout exceeded while awaiting headers`),
+		},
+		{
+			name: "request canceled alone",
+			err:  errors.New(`Get "https://flixhq.to": net/http: request canceled`),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !isFlixHQUnavailable(tc.err) {
+				t.Fatalf("expected isFlixHQUnavailable(%q) = true, got false", tc.err)
+			}
+		})
+	}
 }
 
 func TestFlixHQClient_GetInfo(t *testing.T) {
