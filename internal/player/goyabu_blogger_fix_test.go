@@ -289,9 +289,11 @@ func TestParseBatchexecuteResponse_FallbackRegex_StreamsSemMIME(t *testing.T) {
 func TestParseBatchexecuteResponse_CorpoVazio(t *testing.T) {
 	t.Parallel()
 
+	// 2026-04-28: an empty body now maps to errBloggerVideoUnavailable so
+	// callers can fast-fail dead Blogger tokens. See batchexecute_parse_test.go.
 	_, err := parseBatchexecuteResponse([]byte{})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no video URL found")
+	assert.ErrorIs(t, err, errBloggerVideoUnavailable)
 }
 
 func TestParseBatchexecuteResponse_JSONInvalido(t *testing.T) {

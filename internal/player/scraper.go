@@ -1,6 +1,7 @@
 package player
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -426,7 +427,14 @@ func GetVideoURLForEpisodeEnhanced(episode *models.Episode, anime *models.Anime)
 		if err == nil && resolved != "" {
 			return resolved, nil
 		}
-		// If resolution failed, fall back to the original URL so yt-dlp can try
+		// A dead Blogger token will never become live again — bubble the error
+		// up so the caller routes the user back to episode selection instead
+		// of letting the player layer redundantly resolve the same dead URL.
+		if errors.Is(err, errBloggerVideoUnavailable) {
+			return "", fmt.Errorf("video unavailable on this source: %w", err)
+		}
+		// If resolution failed for an unknown reason, fall back to the original
+		// URL so yt-dlp can have a chance.
 		util.Debug("Could not resolve intermediate URL, using as-is", "url", streamURL, "err", err)
 	}
 
@@ -782,6 +790,15 @@ func extractBloggerGoogleVideoURL(bloggerURL string) (string, error) {
 	return videoURL, nil
 }
 
+// errBloggerVideoUnavailable is returned when Google's batchexecute responds
+// HTTP 200 but with an empty payload — body contains only the `)]}'`
+// anti-hijacking prefix (and optional whitespace) with no streams. This is
+// Google's signal for "this RPC produced no result", and in practice means
+// the Blogger video has been deleted, region-blocked, or the token is dead.
+// Retrying with the same token cannot recover this state, so callers should
+// fail fast and let the next-source fallback take over.
+var errBloggerVideoUnavailable = errors.New("blogger video unavailable upstream")
+
 // parseBatchexecuteResponse extracts the best MP4 video URL from a Google
 // batchexecute API response body (WcwnYd RPC).
 //
@@ -794,6 +811,11 @@ func extractBloggerGoogleVideoURL(bloggerURL string) (string, error) {
 // The fix iterates every index of data[] looking for the first element that is
 // itself an array of arrays (the streams list). A regex fallback is also
 // applied over the raw body in case structured parsing fails entirely.
+//
+// Fix 2026-04-28: distinguish "empty response" (token dead upstream — the body
+// is just `)]}'\n`) from "structured response we failed to parse" so callers
+// can fast-fail dead tokens instead of burning 6 retries (3 in scraper +
+// 3 in player layer) on a guaranteed-failure code path.
 func parseBatchexecuteResponse(body []byte) (string, error) {
 	var videoURL string
 	for line := range strings.SplitSeq(string(body), "\n") {
@@ -879,7 +901,14 @@ func parseBatchexecuteResponse(body []byte) (string, error) {
 	}
 
 	if videoURL == "" {
-		util.Debugf("Blogger batchexecute response body (first 500 bytes): %s", string(body[:min(500, len(body))]))
+		// Strip Google's anti-hijacking prefix and surrounding whitespace; if
+		// nothing remains, the RPC returned no payload — token is dead upstream.
+		stripped := bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(body), []byte(")]}'")))
+		if len(stripped) == 0 {
+			util.Debugf("Blogger batchexecute returned empty body (%d bytes total) — token unavailable upstream", len(body))
+			return "", errBloggerVideoUnavailable
+		}
+		util.Debugf("Blogger batchexecute response body (%d bytes, first 500): %s", len(body), string(body[:min(500, len(body))]))
 		return "", errors.New("no video URL found in batchexecute response")
 	}
 	return videoURL, nil
@@ -904,6 +933,14 @@ func extractBloggerVideoURL(bloggerURL string) (string, error) {
 			return proxyURL, nil
 		}
 		lastErr = err
+		// A dead Blogger token (HTTP 200 + empty body from batchexecute) is
+		// not transient — retrying cannot resurrect a deleted/region-blocked
+		// video, and previously this burned ~3s here plus another ~3s in the
+		// player layer's redundant resolve.
+		if errors.Is(err, errBloggerVideoUnavailable) {
+			util.Debugf("Blogger token unavailable upstream — skipping remaining retries")
+			return "", err
+		}
 		if attempt < maxRetries {
 			util.Debugf("Blogger extraction attempt %d/%d failed: %v, retrying...", attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
