@@ -465,21 +465,26 @@ func TestDecodeToBeParsedExactly29BytesStillTooShort(t *testing.T) {
 
 func TestDecodeToBeParsedCorruptedCiphertext(t *testing.T) {
 	t.Parallel()
+	// Updated 2026-04-29: cipher swapped GCM → CTR (ani-cli e5523a9b /
+	// 1ccbf71f). CTR has no authentication, so tampering doesn't error
+	// at the cipher layer — instead the XORed plaintext is garbage that
+	// fails downstream JSON / regex parsing. We still surface an error,
+	// just from a different layer.
 	plaintext := `{"data":{"episode":{"sourceUrls":[{"sourceUrl":"--0809","sourceName":"P1"}]}}}`
 	blob := encryptToBeParsed(t, plaintext)
 
-	// Decode, flip bits in the ciphertext+tag region (bytes 13+), re-encode.
-	// AES-GCM authentication will reject the tampered payload.
+	// Decode, flip bits across the ciphertext region, re-encode.
 	raw, err := base64.StdEncoding.DecodeString(blob)
 	require.NoError(t, err)
-	for i := 13; i < len(raw); i++ {
+	for i := 13; i < len(raw)-16; i++ {
 		raw[i] ^= 0xFF
 	}
 	corruptBlob := base64.StdEncoding.EncodeToString(raw)
 
 	_, err = decodeToBeParsed(corruptBlob)
-	assert.Error(t, err, "GCM authentication must reject tampered ciphertext")
-	assert.Contains(t, err.Error(), "AES-GCM decryption failed")
+	require.Error(t, err, "tampered ciphertext must not produce a usable result")
+	assert.Contains(t, err.Error(), "no source URLs found",
+		"CTR has no auth — error must come from downstream parsing of the garbage plaintext")
 }
 
 func TestDecodeToBeParsedTruncatedCiphertext(t *testing.T) {
