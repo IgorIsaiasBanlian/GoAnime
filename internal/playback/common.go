@@ -10,12 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"charm.land/huh/v2/spinner"
 	"github.com/alvarorichard/Goanime/internal/api"
 	"github.com/alvarorichard/Goanime/internal/api/providers/metadata"
 	"github.com/alvarorichard/Goanime/internal/models"
 	"github.com/alvarorichard/Goanime/internal/player"
-	"github.com/alvarorichard/Goanime/internal/tui"
 	"github.com/alvarorichard/Goanime/internal/util"
 )
 
@@ -65,37 +63,39 @@ func PlayEpisode(
 		}
 	}
 
-	// Fetch episode metadata and stream URL in parallel under a single spinner
-	// GetEpisodeData (Jikan/AniList metadata) and GetVideoURLForEpisodeEnhanced (scraper)
-	// are independent operations — running them concurrently saves a full round-trip
+	// Fetch episode metadata and stream URL in parallel.
+	//
+	// 2026-04-28: removed the huh/v2 Bubble Tea spinner that previously
+	// wrapped this block. GetVideoURLForEpisodeEnhanced may invoke a
+	// tcell-based fuzzyfinder quality picker (AnimeFire's multi-quality
+	// response). The Bubble Tea spinner and tcell racing for stdin/stdout
+	// caused two user-visible bugs: arrow keys needed multiple presses to
+	// register (input contention) and the spinner's redraw clipped the
+	// first character of the picker's prompt ("S" of "Select"). A static
+	// log line is the smaller evil — animation is a nice-to-have, the
+	// picker working is not.
+	util.Infof("Loading episode...")
+
 	var videoURL string
 	var videoErr error
-	currentEpisodeCopy := currentEpisode // capture for goroutine
+	currentEpisodeCopy := currentEpisode
 
-	_ = tui.RunClean(func() error {
-		return spinner.New().
-			Title("Loading episode...").
-			Type(spinner.Dots).
-			Action(func() {
-				var wg sync.WaitGroup
-				wg.Add(2)
+	var wg sync.WaitGroup
+	wg.Add(2)
 
-				go func() {
-					defer wg.Done()
-					if err := api.GetEpisodeData(anime.MalID, episodeNum, anime); err != nil {
-						util.Debugf("Error fetching episode data: %v", err)
-					}
-				}()
+	go func() {
+		defer wg.Done()
+		if err := api.GetEpisodeData(anime.MalID, episodeNum, anime); err != nil {
+			util.Debugf("Error fetching episode data: %v", err)
+		}
+	}()
 
-				go func() {
-					defer wg.Done()
-					videoURL, videoErr = player.GetVideoURLForEpisodeEnhanced(currentEpisodeCopy, anime)
-				}()
+	go func() {
+		defer wg.Done()
+		videoURL, videoErr = player.GetVideoURLForEpisodeEnhanced(currentEpisodeCopy, anime)
+	}()
 
-				wg.Wait()
-			}).
-			Run()
-	})
+	wg.Wait()
 
 	if videoErr != nil {
 		// Any video URL failure means the episode is not available on this source.

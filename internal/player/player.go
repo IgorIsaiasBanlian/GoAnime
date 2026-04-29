@@ -825,7 +825,11 @@ func HandleDownloadAndPlay(
 						if util.IsDebug {
 							util.Debugf("Extracting URL from episode page: %s", selectedEp.URL)
 						}
-						if url, err := ExtractVideoSourcesWithPrompt(selectedEp.URL); err == nil && url != "" {
+						url, err := ExtractVideoSourcesWithPrompt(selectedEp.URL)
+						if errors.Is(err, ErrBackRequested) {
+							continue
+						}
+						if err == nil && url != "" {
 							videoURLToPlay = url
 						}
 					}
@@ -835,7 +839,11 @@ func HandleDownloadAndPlay(
 					if util.IsDebug {
 						util.Debugf("Fallback: extracting from original URL: %s", videoURL)
 					}
-					if url, err := ExtractVideoSourcesWithPrompt(videoURL); err == nil && url != "" {
+					url, err := ExtractVideoSourcesWithPrompt(videoURL)
+					if errors.Is(err, ErrBackRequested) {
+						continue
+					}
+					if err == nil && url != "" {
 						videoURLToPlay = url
 					}
 				}

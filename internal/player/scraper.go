@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1209,48 +1210,42 @@ func extractActualVideoURL(videoSrc string) (string, error) {
 				}
 			}
 
-			// Prompt user for quality selection
-			// Create items list with back option first
-			type qualityOption struct {
-				Label string
-				Value string
-			}
-			var qualityItems []qualityOption
-			qualityItems = append(qualityItems, qualityOption{Label: "← Back", Value: "back"})
-			for _, v := range videoResponse.Data {
-				label := v.Label
-				if label == "" {
-					label = v.Src
-				}
-				qualityItems = append(qualityItems, qualityOption{Label: label, Value: v.Src})
-			}
+			// Prompt user for quality selection. The picker stays on
+			// go-fuzzyfinder; a prior huh.Select migration regressed
+			// rendering ("piorou") in the user's terminal. Logic fixes
+			// (descending sort, mirror-N disambiguation, friendly fallback
+			// labels, ErrAbort routing, index-based selection) live in
+			// buildAnimeFireQualityItems and are pinned by
+			// animefire_quality_menu_test.go.
+			sortedData, qualityLabels := buildAnimeFireQualityItems(videoResponse.Data)
 
-			// Present quality options to the user
-			qIdx, err := tui.Find(qualityItems, func(i int) string {
-				return qualityItems[i].Label
+			qIdx, err := tui.Find(qualityLabels, func(i int) string {
+				return qualityLabels[i]
 			}, fuzzyfinder.WithPromptString("Select Video Quality: "))
 			if err != nil {
+				if errors.Is(err, fuzzyfinder.ErrAbort) {
+					return "", ErrBackRequested
+				}
 				return "", fmt.Errorf("failed to select quality: %w", err)
 			}
-
-			selectedSrc := qualityItems[qIdx].Value
-
-			// Handle back selection
-			if selectedSrc == "back" {
-				return "", ErrBackRequested
+			if qIdx < 0 || qIdx >= len(sortedData) {
+				return "", fmt.Errorf("invalid quality selection: index %d out of range", qIdx)
 			}
+			picked := sortedData[qIdx]
+			selectedSrc := picked.Src
 
-			// Store the selected quality for future use in this session
+			// Store the selected quality for future use in this session.
+			// Persist a canonical "Np" form so selectQualityFromOptions can
+			// match it deterministically next time, even if the upstream
+			// label changes (e.g. "FHD" → "1080p").
 			if util.GlobalQuality == "" || util.GlobalQuality == "best" {
-				// Extract quality label from selected option
-				for _, v := range videoResponse.Data {
-					if v.Src == selectedSrc {
-						util.GlobalQuality = strings.ToLower(v.Label)
-						if util.IsDebug {
-							util.Debugf("Storing selected quality for session: %s", util.GlobalQuality)
-						}
-						break
-					}
+				if res := extractResolution(picked.Label); res > 0 {
+					util.GlobalQuality = fmt.Sprintf("%dp", res)
+				} else {
+					util.GlobalQuality = strings.ToLower(strings.TrimSpace(picked.Label))
+				}
+				if util.IsDebug {
+					util.Debugf("Storing selected quality for session: %s", util.GlobalQuality)
 				}
 			}
 
@@ -1289,6 +1284,41 @@ func extractActualVideoURL(videoSrc string) (string, error) {
 
 	// If not JSON or no qualities found, return an error
 	return "", errors.New("no valid video URL found")
+}
+
+// buildAnimeFireQualityItems sorts AnimeFire video sources highest-quality
+// first and renders unambiguous, user-friendly labels.
+//
+// Rules:
+//   - parsed resolution from VideoData.Label (e.g. "FHD" / "1080p" → 1080)
+//     is the sort key, descending.
+//   - sources whose resolution can't be parsed render as "Auto" so the
+//     menu never shows an empty or raw URL string.
+//   - duplicate labels get a "(mirror N)" suffix so the fuzzyfinder index
+//     aligns 1:1 with the returned slice and the user's pick is unambiguous.
+func buildAnimeFireQualityItems(videoData []VideoData) ([]VideoData, []string) {
+	sorted := append([]VideoData(nil), videoData...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return extractResolution(sorted[i].Label) > extractResolution(sorted[j].Label)
+	})
+
+	labels := make([]string, len(sorted))
+	seen := make(map[string]int, len(sorted))
+	for i, v := range sorted {
+		base := "Auto"
+		if res := extractResolution(v.Label); res > 0 {
+			base = fmt.Sprintf("%dp", res)
+		} else if trimmed := strings.TrimSpace(v.Label); trimmed != "" {
+			base = trimmed
+		}
+		seen[base]++
+		if seen[base] > 1 {
+			labels[i] = fmt.Sprintf("%s (mirror %d)", base, seen[base])
+		} else {
+			labels[i] = base
+		}
+	}
+	return sorted, labels
 }
 
 // selectQualityFromOptions selects the best matching quality from available options

@@ -1298,7 +1298,55 @@ func getBestQualityURL(episode models.Episode, anime *models.Anime) (string, err
 	return "", fmt.Errorf("unsupported episode identifier: %s", episode.URL)
 }
 
+// buildQualityMenu sorts sources highest-quality-first and produces stable,
+// unambiguous labels. Sources with Quality == 0 (label digits not parseable)
+// render as "Auto"; same-quality duplicates get "(mirror N)" suffixes so the
+// fuzzyfinder choices are 1:1 with the returned slice and indexing the
+// selection is unambiguous.
+func buildQualityMenu(sources []struct {
+	Quality int
+	URL     string
+}) ([]struct {
+	Quality int
+	URL     string
+}, []string) {
+	sorted := append(sources[:0:0], sources...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Quality > sorted[j].Quality
+	})
+
+	items := make([]string, len(sorted))
+	seen := make(map[string]int, len(sorted))
+	for i, s := range sorted {
+		base := "Auto"
+		if s.Quality > 0 {
+			base = fmt.Sprintf("%dp", s.Quality)
+		}
+		seen[base]++
+		if seen[base] > 1 {
+			items[i] = fmt.Sprintf("%s (mirror %d)", base, seen[base])
+		} else {
+			items[i] = base
+		}
+	}
+	return sorted, items
+}
+
 // ExtractVideoSourcesWithPrompt allows the user to choose video quality.
+//
+// 2026-04-28 fix: the previous implementation had three UX bugs.
+//  1. When two sources shared a numeric quality (e.g. mirror A and mirror B
+//     both 720p), the post-prompt loop matched on the rendered label and
+//     always returned the *first* matching source — the user's actual
+//     selection was silently discarded. Indexing directly into the sorted
+//     slice fixes this.
+//  2. Cancelling the prompt (Esc / Ctrl-C → fuzzyfinder.ErrAbort) silently
+//     played whichever source happened to be first. We now propagate
+//     ErrBackRequested so callers can route back to the menu.
+//  3. Sources with an unparseable label rendered as "0p", and the order
+//     matched whatever the upstream returned (often ascending). We now
+//     sort descending by quality and substitute a useful fallback label
+//     when the resolution is unknown.
 func ExtractVideoSourcesWithPrompt(episodeURL string) (string, error) {
 	sources, err := ExtractVideoSources(episodeURL)
 	if err != nil {
@@ -1310,23 +1358,28 @@ func ExtractVideoSourcesWithPrompt(episodeURL string) (string, error) {
 	if len(sources) == 1 {
 		return sources[0].URL, nil
 	}
-	var items []string
-	for _, s := range sources {
-		items = append(items, fmt.Sprintf("%dp", s.Quality))
-	}
+
+	sorted, items := buildQualityMenu(sources)
+
+	// Use go-fuzzyfinder. A prior huh.Select migration produced a worse
+	// rendering regression in the user's terminal (doubled "0p" suffix on
+	// labels), so the picker stays on fuzzyfinder. The pure-logic fixes
+	// (descending sort, mirror-N disambiguation, ErrAbort routing,
+	// index-based source selection) live in buildQualityMenu and are
+	// pinned by quality_menu_test.go.
 	idx, err := tui.Find(items, func(i int) string {
 		return items[i]
 	}, fuzzyfinder.WithPromptString("Select video quality: "))
 	if err != nil {
-		return sources[0].URL, nil
-	}
-	result := items[idx]
-	for _, s := range sources {
-		if fmt.Sprintf("%dp", s.Quality) == result {
-			return s.URL, nil
+		if errors.Is(err, fuzzyfinder.ErrAbort) {
+			return "", ErrBackRequested
 		}
+		return "", fmt.Errorf("failed to select quality: %w", err)
 	}
-	return sources[0].URL, nil
+	if idx < 0 || idx >= len(sorted) {
+		return "", fmt.Errorf("invalid quality selection: index %d out of range", idx)
+	}
+	return sorted[idx].URL, nil
 }
 
 // HandleBatchDownload performs batch download of episodes.

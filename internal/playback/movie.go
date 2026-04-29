@@ -10,12 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"charm.land/huh/v2/spinner"
 	"github.com/alvarorichard/Goanime/internal/api"
 	"github.com/alvarorichard/Goanime/internal/discord"
 	"github.com/alvarorichard/Goanime/internal/models"
 	"github.com/alvarorichard/Goanime/internal/player"
-	"github.com/alvarorichard/Goanime/internal/tui"
 	"github.com/alvarorichard/Goanime/internal/util"
 )
 
@@ -40,16 +38,10 @@ func HandleMovie(anime *models.Anime, episodes []models.Episode, discordEnabled 
 		var videoURL string
 		var videoErr error
 
-		// Use spinner while fetching video URL
-		_ = tui.RunClean(func() error {
-			return spinner.New().
-				Title("Loading video stream...").
-				Type(spinner.Dots).
-				Action(func() {
-					videoURL, videoErr = player.GetVideoURLForEpisodeEnhanced(&episodes[0], anime)
-				}).
-				Run()
-		})
+		// Use static log instead of spinner while fetching video URL
+		// to avoid terminal UI contention if a quality picker opens.
+		util.Infof("Loading video stream...")
+		videoURL, videoErr = player.GetVideoURLForEpisodeEnhanced(&episodes[0], anime)
 
 		if videoErr != nil {
 			log.Printf("Failed to extract video URL: %v", util.ErrorHandler(videoErr))
