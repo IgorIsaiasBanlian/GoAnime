@@ -2,36 +2,43 @@
 // drift that broke episode source resolution starting 2026-04-22.
 //
 // Discovered:  2026-04-29 — comparison
-//              https://github.com/pystardust/ani-cli/compare/allanime-fix...justchokingaround:ani-cli:allanime-fix
-//              shows ani-cli switched decode_tobeparsed from AES-256-GCM to
-//              AES-256-CTR (counter = nonce||0x00000002), and replaced the
-//              direct POST request with a persisted-query GET that requires
-//              `Origin: https://youtu-chan.com`. GoAnime still issued the
-//              legacy POST and treated the trailing 16 bytes as a GCM auth
-//              tag, so every episode lookup failed silently.
+//
+//	https://github.com/pystardust/ani-cli/compare/allanime-fix...justchokingaround:ani-cli:allanime-fix
+//	shows ani-cli switched decode_tobeparsed from AES-256-GCM to
+//	AES-256-CTR (counter = nonce||0x00000002), and replaced the
+//	direct POST request with a persisted-query GET that requires
+//	`Origin: https://youtu-chan.com`. GoAnime still issued the
+//	legacy POST and treated the trailing 16 bytes as a GCM auth
+//	tag, so every episode lookup failed silently.
+//
 // Fixed:       2026-04-29 — this commit. Production code switched to CTR;
-//              GetEpisodeURL now tries the persisted-query GET first and
-//              falls back to POST only when the response lacks `tobeparsed`.
-//              Filemoon (sourceName "Fm-mp4") sources are now decrypted via
-//              their own AES-CTR key-parts protocol.
+//
+//	GetEpisodeURL now tries the persisted-query GET first and
+//	falls back to POST only when the response lacks `tobeparsed`.
+//	Filemoon (sourceName "Fm-mp4") sources are now decrypted via
+//	their own AES-CTR key-parts protocol.
+//
 // Root cause:  Two unrelated upstream drifts that landed within a week:
-//              1. AllAnime's `tobeparsed` blobs no longer carry a valid
-//                 GCM auth tag in the trailing 16 bytes (ani-cli commit
-//                 e5523a9b). `cipher.GCM.Open` rejected every blob with
-//                 "AES-GCM decryption failed" at allanime.go:114-117.
-//              2. AllAnime's POST endpoint stopped returning `tobeparsed`
-//                 unless the request matches the persisted-query GET shape
-//                 with `Origin: https://youtu-chan.com` (ani-cli commit
-//                 1ccbf71f).
+//  1. AllAnime's `tobeparsed` blobs no longer carry a valid
+//     GCM auth tag in the trailing 16 bytes (ani-cli commit
+//     e5523a9b). `cipher.GCM.Open` rejected every blob with
+//     "AES-GCM decryption failed" at allanime.go:114-117.
+//  2. AllAnime's POST endpoint stopped returning `tobeparsed`
+//     unless the request matches the persisted-query GET shape
+//     with `Origin: https://youtu-chan.com` (ani-cli commit
+//     1ccbf71f).
+//
 // Blast radius:total — every AllAnime episode resolution failed since
-//              2026-04-22. Users saw "no source URLs found for episode" at
-//              allanime.go:651 with no path forward (since switching scraper
-//              didn't help — AllAnime is the primary EN/sub source).
+//
+//	2026-04-22. Users saw "no source URLs found for episode" at
+//	allanime.go:651 with no path forward (since switching scraper
+//	didn't help — AllAnime is the primary EN/sub source).
 //
 // The tests below pin the fix in place. Reverting any of:
 //   - decodeToBeParsed back to AES-GCM
 //   - GetEpisodeURL back to POST-only
 //   - the filemoon-specific decrypt path
+//
 // will fail one of these tests loudly.
 package scraper
 

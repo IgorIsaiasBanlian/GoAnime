@@ -762,7 +762,6 @@ func (c *AllAnimeClient) legacyPOST(varsBytes []byte) ([]byte, error) {
 	return body, nil
 }
 
-
 // processSourceURLsConcurrent processes source URLs with concurrent requests and priority-based selection
 func (c *AllAnimeClient) processSourceURLsConcurrent(sourceURLs []string, quality, animeID, episodeNo string) (string, map[string]string, error) {
 	type result struct {
