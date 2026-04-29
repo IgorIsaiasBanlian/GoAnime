@@ -33,7 +33,7 @@ var (
 	isNumericRe         = regexp.MustCompile(`^\d+(?:\.\d+)?$`)
 	hasLetterRe         = regexp.MustCompile(`[A-Za-z]`)
 	videoURLPatternRe   = regexp.MustCompile(`https?://[^\s<>"]+?\.(?:mp4|m3u8)`)
-	bloggerPatternRe    = regexp.MustCompile(`https://www\.blogger\.com/video\.g\?token=([A-Za-z0-9_-]+)`)
+	bloggerPatternRe    = regexp.MustCompile(`^https://www\.blogger\.com/video\.g\?token=([A-Za-z0-9_-]+)$`)
 	tokenRe             = regexp.MustCompile(`token=([A-Za-z0-9_-]+)`)
 	sidRe               = regexp.MustCompile(`"FdrFJe"\s*:\s*"([^"]+)"`)
 	bhRe                = regexp.MustCompile(`"cfb2h"\s*:\s*"([^"]+)"`)
@@ -647,13 +647,32 @@ func fetchContent(url string) (string, error) {
 }
 
 func findBloggerLink(content string) (string, error) {
-	matches := bloggerPatternRe.FindStringSubmatch(content)
-
-	if len(matches) > 0 {
-		return matches[0], nil
-	} else {
+	prefix := "https://www.blogger.com/video.g?token="
+	idx := strings.Index(content, prefix)
+	if idx == -1 {
 		return "", errors.New("no blogger video link found in the content")
 	}
+
+	start := idx
+	curr := idx + len(prefix)
+	for curr < len(content) {
+		c := content[curr]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
+			curr++
+		} else {
+			break
+		}
+	}
+
+	if curr > idx+len(prefix) {
+		url := content[start:curr]
+		// Validate the extracted URL with the anchored regex to satisfy security constraints
+		if bloggerPatternRe.MatchString(url) {
+			return url, nil
+		}
+	}
+
+	return "", errors.New("no blogger video link found in the content")
 }
 
 // newSurfClient creates a surf HTTP client with Chrome browser impersonation.

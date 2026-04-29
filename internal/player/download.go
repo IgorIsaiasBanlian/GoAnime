@@ -1310,7 +1310,11 @@ func buildQualityMenu(sources []struct {
 	Quality int
 	URL     string
 }, []string) {
-	sorted := append(sources[:0:0], sources...)
+	sorted := make([]struct {
+		Quality int
+		URL     string
+	}, len(sources))
+	copy(sorted, sources)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		return sorted[i].Quality > sorted[j].Quality
 	})
