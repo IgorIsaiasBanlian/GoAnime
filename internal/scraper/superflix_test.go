@@ -494,6 +494,36 @@ func TestSearchMedia_Success(t *testing.T) {
 	assert.Equal(t, "2024", results[0].Year)
 }
 
+// TestSearchMedia_NormalizesHyphenatedQuery verifies that hyphenated CLI
+// queries (e.g. "the-boys" produced by TreatingAnimeName) are converted to
+// spaced queries before being sent to SuperFlix, which treats the dash as a
+// literal character and would otherwise return zero results.
+func TestSearchMedia_NormalizesHyphenatedQuery(t *testing.T) {
+	t.Parallel()
+
+	var receivedQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedQuery = r.URL.Query().Get("s")
+		fmt.Fprint(w, `<html><body>
+			<div class="group/card">
+				<img alt="The Boys" src="https://image.tmdb.org/t/p/w342/p.jpg" />
+				<button data-msg="Copiar TMDB" data-copy="76479">TMDB</button>
+				<button data-msg="Copiar Link" data-copy="http://example.com/serie/76479">Link</button>
+				<div class="mt-3">2019 | SÉRIE</div>
+			</div>
+		</body></html>`)
+	}))
+	defer srv.Close()
+
+	client := newTestSuperFlixClient(srv.URL)
+	results, err := client.SearchMedia("the-boys")
+
+	require.NoError(t, err)
+	assert.Equal(t, "the boys", receivedQuery, "hyphens should be normalized to spaces")
+	require.Len(t, results, 1)
+	assert.Equal(t, "The Boys", results[0].Title)
+}
+
 func TestSearchMedia_EmptyResults(t *testing.T) {
 	t.Parallel()
 

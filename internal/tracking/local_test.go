@@ -301,8 +301,7 @@ func TestLocalTracker_EpisodeSpecificKeys(t *testing.T) {
 	}
 	if got3 == nil {
 		t.Fatal("ep3 tracking not found")
-	}
-	if got3.EpisodeNumber != 3 || got3.PlaybackTime != 900 {
+	} else if got3.EpisodeNumber != 3 || got3.PlaybackTime != 900 {
 		t.Errorf("ep3 mismatch: got episode=%d time=%d, want episode=3 time=900",
 			got3.EpisodeNumber, got3.PlaybackTime)
 	}
@@ -313,8 +312,7 @@ func TestLocalTracker_EpisodeSpecificKeys(t *testing.T) {
 	}
 	if got4 == nil {
 		t.Fatal("ep4 tracking not found")
-	}
-	if got4.EpisodeNumber != 4 || got4.PlaybackTime != 450 {
+	} else if got4.EpisodeNumber != 4 || got4.PlaybackTime != 450 {
 		t.Errorf("ep4 mismatch: got episode=%d time=%d, want episode=4 time=450",
 			got4.EpisodeNumber, got4.PlaybackTime)
 	}

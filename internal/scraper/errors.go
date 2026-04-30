@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/alvarorichard/Goanime/internal/util"
 )
 
 // ErrSourceUnavailable is returned when an upstream source is temporarily
@@ -44,21 +45,48 @@ func checkHTMLResponse(resp *http.Response, body []byte, source string) error {
 	return nil
 }
 
+// challengeBodyPhrases are phrases that, when present in a page's rendered
+// text, strongly indicate a Cloudflare/anti-bot interstitial rather than the
+// real content. The bare word "cloudflare" is intentionally excluded: real
+// pages routinely mention it in footers, terms of service, or user comments
+// without being challenges (issue #166: Goyabu episode pages were being
+// misclassified, breaking stream extraction even when playersData was valid).
+var challengeBodyPhrases = []string{
+	"cf-error",
+	"checking your browser before accessing",
+	"ddos protection by cloudflare",
+	"please enable cookies and reload",
+	"performance & security by cloudflare",
+	"ray id:",
+	"please complete the security check to access",
+	"attention required! | cloudflare",
+}
+
 // checkChallengeDocument detects common Cloudflare/challenge pages in HTML
 // responses that should be classified as a source-unavailable condition.
+// Returns the matching marker via debug log when triggered so misclassifications
+// are diagnosable from logs.
 func checkChallengeDocument(doc *goquery.Document, source string) error {
 	title := strings.ToLower(strings.TrimSpace(doc.Find("title").First().Text()))
-	if strings.Contains(title, "just a moment") {
+	if strings.Contains(title, "just a moment") ||
+		strings.Contains(title, "attention required") ||
+		strings.Contains(title, "access denied") {
+		util.Debug("challenge detected via title", "source", source, "title", title)
 		return NewBlockedChallengeError(source, "http", "returned a challenge page", nil)
 	}
 
-	if doc.Find("#cf-wrapper").Length() > 0 || doc.Find("#challenge-form").Length() > 0 {
+	if doc.Find("#cf-wrapper").Length() > 0 || doc.Find("#challenge-form").Length() > 0 ||
+		doc.Find("#cf-error-details").Length() > 0 || doc.Find(".cf-browser-verification").Length() > 0 {
+		util.Debug("challenge detected via cf marker element", "source", source)
 		return NewBlockedChallengeError(source, "http", "returned a challenge page", nil)
 	}
 
 	body := strings.ToLower(doc.Text())
-	if strings.Contains(body, "cf-error") || strings.Contains(body, "cloudflare") {
-		return NewBlockedChallengeError(source, "http", "returned a challenge page", nil)
+	for _, phrase := range challengeBodyPhrases {
+		if strings.Contains(body, phrase) {
+			util.Debug("challenge detected via body phrase", "source", source, "phrase", phrase)
+			return NewBlockedChallengeError(source, "http", "returned a challenge page", nil)
+		}
 	}
 
 	return nil

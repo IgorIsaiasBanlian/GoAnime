@@ -82,7 +82,7 @@ func TestSourceCircuitBreakerSkipsAfterRepeatedOriginFailures(t *testing.T) {
 	manager.breaker.threshold = 2
 	manager.breaker.cooldown = time.Minute
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		results, err := manager.SearchAnime("naruto", nil)
 		require.NoError(t, err)
 		require.Len(t, results, 1)

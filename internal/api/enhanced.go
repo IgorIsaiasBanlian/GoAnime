@@ -146,30 +146,16 @@ func SearchAnimeEnhanced(name string, source string) (*models.Anime, error) {
 
 	util.Debug("Search results summary", "total", len(animes))
 
-	// Show sources breakdown in debug only
-	animefireCount := 0
-	allanimeCount := 0
-	animedriveCount := 0
-	flixhqCount := 0
-	nineAnimeCount := 0
-	superflixCount := 0
-	for _, anime := range animes {
-		if strings.Contains(anime.Source, "AnimeFire") {
-			animefireCount++
-		} else if anime.Source == "AllAnime" {
-			allanimeCount++
-		} else if anime.Source == "AnimeDrive" {
-			animedriveCount++
-		} else if anime.Source == "FlixHQ" {
-			flixhqCount++
-		} else if anime.Source == "9Anime" {
-			nineAnimeCount++
-		} else if anime.Source == "SuperFlix" {
-			superflixCount++
-		}
-	}
-
-	util.Debug("Source breakdown", "AnimeFire", animefireCount, "AllAnime", allanimeCount, "AnimeDrive", animedriveCount, "FlixHQ", flixhqCount, "9Anime", nineAnimeCount, "SuperFlix", superflixCount)
+	breakdown := countSourceBreakdown(animes)
+	util.Debug("Source breakdown",
+		"AnimeFire", breakdown.AnimeFire,
+		"AllAnime", breakdown.AllAnime,
+		"AnimeDrive", breakdown.AnimeDrive,
+		"FlixHQ", breakdown.FlixHQ,
+		"9Anime", breakdown.NineAnime,
+		"SuperFlix", breakdown.SuperFlix,
+		"Goyabu", breakdown.Goyabu,
+	)
 
 	// Sort results by language priority: Portuguese first, then Multilanguage, Movies/TV, English, others
 	sort.SliceStable(animes, func(i, j int) bool {
@@ -279,10 +265,12 @@ func GetAnimeEpisodesEnhanced(anime *models.Anime) ([]models.Episode, error) {
 	// Determine source type from multiple indicators with enhanced logic
 	var sourceName string
 
-	// Priority 1: Check the Source field (most reliable)
+	// Priority 1: Check the Source field (most reliable). Use a case-insensitive
+	// match for AnimeFire because the scraper emits "Animefire.io" (lowercase 'f')
+	// while older code paths/tests sometimes use the camelcase spelling "AnimeFire".
 	if anime.Source == "AllAnime" {
 		sourceName = "AllAnime"
-	} else if strings.Contains(anime.Source, "AnimeFire") {
+	} else if strings.Contains(strings.ToLower(anime.Source), "animefire") {
 		sourceName = "Animefire.io"
 	} else if anime.Source == "AnimeDrive" {
 		sourceName = "AnimeDrive"
@@ -789,6 +777,9 @@ func GetFlixHQEpisodes(media *models.Anime) ([]models.Episode, error) {
 		return seasons[i].Title
 	}, fuzzyfinder.WithPromptString("Select season: "))
 	if err != nil {
+		if errors.Is(err, fuzzyfinder.ErrAbort) {
+			return nil, ErrBackToSearch
+		}
 		return nil, fmt.Errorf("season selection cancelled: %w", err)
 	}
 
@@ -1048,6 +1039,9 @@ func GetSuperFlixEpisodes(media *models.Anime) ([]models.Episode, error) {
 		return seasonLabels[i]
 	}, fuzzyfinder.WithPromptString("Select season: "))
 	if err != nil {
+		if errors.Is(err, fuzzyfinder.ErrAbort) {
+			return nil, ErrBackToSearch
+		}
 		return nil, fmt.Errorf("season selection cancelled: %w", err)
 	}
 
@@ -1149,6 +1143,49 @@ func GetSuperFlixStreamURL(media *models.Anime, episode *models.Episode, quality
 
 	util.Debug("SuperFlix stream URL obtained", "url", result.StreamURL[:min(len(result.StreamURL), 80)])
 	return result.StreamURL, nil
+}
+
+// sourceBreakdown holds per-source result counts for the debug "Source breakdown"
+// diagnostic line. Counted via countSourceBreakdown so the predicate stays
+// testable in isolation.
+type sourceBreakdown struct {
+	AnimeFire  int
+	AllAnime   int
+	AnimeDrive int
+	FlixHQ     int
+	NineAnime  int
+	SuperFlix  int
+	Goyabu     int
+}
+
+// countSourceBreakdown tallies anime results by Source field using
+// case-insensitive matching for AnimeFire. The scraper canonical Source is
+// "Animefire.io" (lowercase 'f'), but older callers and tests sometimes emit
+// "AnimeFire"; both must be counted so the diagnostic line never lies.
+func countSourceBreakdown(animes []*models.Anime) sourceBreakdown {
+	var b sourceBreakdown
+	for _, anime := range animes {
+		if anime == nil {
+			continue
+		}
+		switch {
+		case strings.Contains(strings.ToLower(anime.Source), "animefire"):
+			b.AnimeFire++
+		case anime.Source == "AllAnime":
+			b.AllAnime++
+		case anime.Source == "AnimeDrive":
+			b.AnimeDrive++
+		case anime.Source == "FlixHQ":
+			b.FlixHQ++
+		case anime.Source == "9Anime":
+			b.NineAnime++
+		case anime.Source == "SuperFlix":
+			b.SuperFlix++
+		case anime.Source == "Goyabu":
+			b.Goyabu++
+		}
+	}
+	return b
 }
 
 // languagePriority returns a sort key for language-based ordering.

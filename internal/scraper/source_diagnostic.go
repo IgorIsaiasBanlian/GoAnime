@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // DiagnosticKind identifies the layer where a provider failure happened.
@@ -379,4 +380,73 @@ func containsAny(s string, needles ...string) bool {
 		}
 	}
 	return false
+}
+
+// originProbeTransport is overridable in tests — production code uses the
+// default transport so we honor the system proxy / cert store.
+var originProbeTransport http.RoundTripper = http.DefaultTransport
+
+// ProbeOriginStatus issues a quick HEAD request to disambiguate "client gave
+// up waiting" from "upstream actively responded with an error". Returns the
+// HTTP status code if the upstream answered, or 0 if the connection failed
+// (DNS, refused, timeout, TLS, etc.).
+//
+// Used after a search timeout to enrich the diagnostic with the real
+// upstream status. The budget is intentionally short so we never add more
+// than a couple of seconds on top of the slow-path the user already waited.
+func ProbeOriginStatus(parent context.Context, probeURL string, budget time.Duration) int {
+	if probeURL == "" || budget <= 0 {
+		return 0
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+
+	ctx, cancel := context.WithTimeout(parent, budget)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, probeURL, nil)
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; GoAnime origin probe)")
+
+	client := &http.Client{Transport: originProbeTransport, Timeout: budget}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// EnrichTimeoutWithProbe upgrades a generic timeout error into a structured
+// SourceDiagnostic when a fast follow-up probe reveals the upstream is in fact
+// returning a 5xx (Cloudflare 521-524 origin-down, 502/503/504 gateway, etc.).
+// Returns the original error unchanged if the probe is inconclusive — we never
+// downgrade the diagnostic, only add information.
+func EnrichTimeoutWithProbe(parent context.Context, source, layer, probeURL string, originalErr error, budget time.Duration) error {
+	if originalErr == nil {
+		return nil
+	}
+	status := ProbeOriginStatus(parent, probeURL, budget)
+	if status == 0 || !isOriginUnavailableStatus(status) {
+		return originalErr
+	}
+
+	var msg string
+	if isCloudflareOriginStatus(status) {
+		msg = fmt.Sprintf("origin down (Cloudflare %d) — search also timed out", status)
+	} else {
+		msg = fmt.Sprintf("upstream returned HTTP %d — search also timed out", status)
+	}
+
+	return &SourceDiagnostic{
+		Source:     source,
+		Layer:      layer,
+		Kind:       DiagnosticSourceUnavailable,
+		StatusCode: status,
+		Message:    msg,
+		Err:        joinDiagnosticErr(originalErr, ErrSourceUnavailable),
+	}
 }

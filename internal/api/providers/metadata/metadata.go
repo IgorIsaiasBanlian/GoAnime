@@ -851,14 +851,8 @@ func findSerieTMDBID(html string, searchName string) string {
 	for _, m := range serieMatches {
 		tmdbID := html[m[2]:m[3]]
 		// Look at the surrounding context (±3000 chars) for a title
-		start := m[0] - 3000
-		if start < 0 {
-			start = 0
-		}
-		end := m[1] + 1000
-		if end > len(html) {
-			end = len(html)
-		}
+		start := max(m[0]-3000, 0)
+		end := min(m[1]+1000, len(html))
 		block := html[start:end]
 
 		// Extract all titles from the block (alt attrs and h3 tags)

@@ -38,6 +38,46 @@ var (
 	downloadPartRetryDelay = 500 * time.Millisecond
 )
 
+// downloadUserAgent mirrors the browser User-Agent that AnimeFire's CDN
+// (lightspeedst.net) and other token-protected origins expect. Using the
+// default Go transport UA causes some CDNs to return HTTP 401.
+const downloadUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+// applyDownloadAuthHeaders sets the Referer / User-Agent headers required by
+// origin-protected CDNs (AnimeFire's lightspeedst.net, AllAnime, etc.) onto a
+// download request. It prefers the per-source referer stored in
+// util.GetGlobalReferer (set by the scraper / api layer) and falls back to
+// hardcoded values for known hosts so legacy paths keep working even when the
+// referer was never set.
+func applyDownloadAuthHeaders(req *http.Request, url string) {
+	if req == nil {
+		return
+	}
+	if req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", downloadUserAgent)
+	}
+
+	if ref := util.GetGlobalReferer(); ref != "" {
+		req.Header.Set("Referer", ref)
+		origin := strings.TrimSuffix(ref, "/")
+		if u, err := neturl.Parse(origin); err == nil && u.Scheme != "" && u.Host != "" {
+			origin = u.Scheme + "://" + u.Host
+		}
+		if req.Header.Get("Origin") == "" {
+			req.Header.Set("Origin", origin)
+		}
+		return
+	}
+
+	switch {
+	case strings.Contains(url, "allanime.day"), strings.Contains(url, "allanime.pro"):
+		req.Header.Set("Referer", "https://allanime.to")
+	case strings.Contains(url, "lightspeedst.net"), strings.Contains(url, "animefire"):
+		req.Header.Set("Referer", "https://animefire.io")
+		req.Header.Set("Origin", "https://animefire.io")
+	}
+}
+
 // downloadPart downloads a part of the video file using HTTP Range Requests.
 // Automatically retries with resume on connection drops (up to 20 stale retries).
 func downloadPart(url string, from, to int64, part int, client *http.Client, destPath string, m *model) error {
@@ -76,9 +116,7 @@ func downloadPart(url string, from, to int64, part int, client *http.Client, des
 			return err
 		}
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", current, to))
-		if strings.Contains(url, "allanime.day") || strings.Contains(url, "allanime.pro") {
-			req.Header.Set("Referer", "https://allanime.to")
-		}
+		applyDownloadAuthHeaders(req, url)
 
 		resp, err := client.Do(req) // #nosec G704
 		if err != nil {
@@ -1260,7 +1298,59 @@ func getBestQualityURL(episode models.Episode, anime *models.Anime) (string, err
 	return "", fmt.Errorf("unsupported episode identifier: %s", episode.URL)
 }
 
+// buildQualityMenu sorts sources highest-quality-first and produces stable,
+// unambiguous labels. Sources with Quality == 0 (label digits not parseable)
+// render as "Auto"; same-quality duplicates get "(mirror N)" suffixes so the
+// fuzzyfinder choices are 1:1 with the returned slice and indexing the
+// selection is unambiguous.
+func buildQualityMenu(sources []struct {
+	Quality int
+	URL     string
+}) ([]struct {
+	Quality int
+	URL     string
+}, []string) {
+	sorted := make([]struct {
+		Quality int
+		URL     string
+	}, len(sources))
+	copy(sorted, sources)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return sorted[i].Quality > sorted[j].Quality
+	})
+
+	items := make([]string, len(sorted))
+	seen := make(map[string]int, len(sorted))
+	for i, s := range sorted {
+		base := "Auto"
+		if s.Quality > 0 {
+			base = fmt.Sprintf("%dp", s.Quality)
+		}
+		seen[base]++
+		if seen[base] > 1 {
+			items[i] = fmt.Sprintf("%s (mirror %d)", base, seen[base])
+		} else {
+			items[i] = base
+		}
+	}
+	return sorted, items
+}
+
 // ExtractVideoSourcesWithPrompt allows the user to choose video quality.
+//
+// 2026-04-28 fix: the previous implementation had three UX bugs.
+//  1. When two sources shared a numeric quality (e.g. mirror A and mirror B
+//     both 720p), the post-prompt loop matched on the rendered label and
+//     always returned the *first* matching source — the user's actual
+//     selection was silently discarded. Indexing directly into the sorted
+//     slice fixes this.
+//  2. Cancelling the prompt (Esc / Ctrl-C → fuzzyfinder.ErrAbort) silently
+//     played whichever source happened to be first. We now propagate
+//     ErrBackRequested so callers can route back to the menu.
+//  3. Sources with an unparseable label rendered as "0p", and the order
+//     matched whatever the upstream returned (often ascending). We now
+//     sort descending by quality and substitute a useful fallback label
+//     when the resolution is unknown.
 func ExtractVideoSourcesWithPrompt(episodeURL string) (string, error) {
 	sources, err := ExtractVideoSources(episodeURL)
 	if err != nil {
@@ -1272,23 +1362,28 @@ func ExtractVideoSourcesWithPrompt(episodeURL string) (string, error) {
 	if len(sources) == 1 {
 		return sources[0].URL, nil
 	}
-	var items []string
-	for _, s := range sources {
-		items = append(items, fmt.Sprintf("%dp", s.Quality))
-	}
+
+	sorted, items := buildQualityMenu(sources)
+
+	// Use go-fuzzyfinder. A prior huh.Select migration produced a worse
+	// rendering regression in the user's terminal (doubled "0p" suffix on
+	// labels), so the picker stays on fuzzyfinder. The pure-logic fixes
+	// (descending sort, mirror-N disambiguation, ErrAbort routing,
+	// index-based source selection) live in buildQualityMenu and are
+	// pinned by quality_menu_test.go.
 	idx, err := tui.Find(items, func(i int) string {
 		return items[i]
 	}, fuzzyfinder.WithPromptString("Select video quality: "))
 	if err != nil {
-		return sources[0].URL, nil
-	}
-	result := items[idx]
-	for _, s := range sources {
-		if fmt.Sprintf("%dp", s.Quality) == result {
-			return s.URL, nil
+		if errors.Is(err, fuzzyfinder.ErrAbort) {
+			return "", ErrBackRequested
 		}
+		return "", fmt.Errorf("failed to select quality: %w", err)
 	}
-	return sources[0].URL, nil
+	if idx < 0 || idx >= len(sorted) {
+		return "", fmt.Errorf("invalid quality selection: index %d out of range", idx)
+	}
+	return sorted[idx].URL, nil
 }
 
 // HandleBatchDownload performs batch download of episodes.
@@ -2080,8 +2175,8 @@ func handleExistingEpisodes(episodes []models.Episode, animeURL string, startNum
 
 	// Play the episode using the existing player logic
 	// Note: We use the local file path as the video URL since it's already downloaded
-	// anilistID set to 0 since we don't have that context here, updater set to nil
-	return playVideo(episodePath, episodes, episodeNum, 0, nil)
+	// IDs set to 0 since we don't have that context here, updater set to nil
+	return playVideo(episodePath, episodes, episodeNum, 0, 0, nil)
 }
 
 // askAndPlayDownloadedEpisode asks the user which episode from the downloaded range they want to play
@@ -2164,6 +2259,6 @@ func askAndPlayDownloadedEpisode(episodes []models.Episode, animeURL string, sta
 
 	// Play the episode using the existing player logic
 	// Note: We use the local file path as the video URL since it's already downloaded
-	// anilistID set to 0 since we don't have that context here, updater set to nil
-	return playVideo(episodePath, episodes, episodeNum, 0, nil)
+	// IDs set to 0 since we don't have that context here, updater set to nil
+	return playVideo(episodePath, episodes, episodeNum, 0, 0, nil)
 }

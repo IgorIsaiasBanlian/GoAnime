@@ -278,10 +278,16 @@ func showResumeDialog(episodeNum int, timeSeconds int) (bool, error) {
 
 // playVideo plays the video and manages interactions
 // playVideo plays the video and manages interactions
+//
+// malID is the MyAnimeList ID (used by the AniSkip API).
+// anilistID is the AniList ID (used as the tracking/resume key).
+// They are distinct identifiers — passing one in place of the other
+// causes resume data to collide across sources.
 func playVideo(
 	videoURL string,
 	episodes []models.Episode,
 	currentEpisodeNum int,
+	malID int,
 	anilistID int,
 	updater *discord.RichPresenceUpdater,
 ) error {
@@ -480,8 +486,8 @@ func playVideo(
 		mpvArgs = append(mpvArgs, fmt.Sprintf("--start=+%d", resumeTime))
 	}
 
-	// Fetch AniSkip data asynchronously
-	skipDataChan := fetchAniSkipAsync(anilistID, currentEpisodeNum, currentEpisode)
+	// Fetch AniSkip data asynchronously (AniSkip API is keyed on MAL ID)
+	skipDataChan := fetchAniSkipAsync(malID, currentEpisodeNum, currentEpisode)
 
 	// Start the video with mpv
 	mpvTimer := util.StartTimer("MPV:StartVideo")
@@ -536,6 +542,7 @@ func playVideo(
 		episodes,
 		currentEpisodeIndex,
 		currentEpisodeNum,
+		malID,
 		anilistID,
 		updater,
 		stopTracking,
@@ -755,11 +762,18 @@ func InitTrackerAsync() {
 	}()
 }
 
-// fetchAniSkipAsync fetches AniSkip data in parallel
-func fetchAniSkipAsync(anilistID, episodeNum int, episode *models.Episode) chan error {
+// aniSkipFetcher is the function used to fetch AniSkip skip-times data.
+// It is exposed as a package-level variable so tests can swap it for a spy
+// to verify which ID (MAL vs AniList) is being routed to the AniSkip API
+// without making real network calls.
+var aniSkipFetcher = api.GetAndParseAniSkipData
+
+// fetchAniSkipAsync fetches AniSkip data in parallel.
+// The AniSkip API is keyed by MyAnimeList (MAL) ID, not AniList ID.
+func fetchAniSkipAsync(malID, episodeNum int, episode *models.Episode) chan error {
 	ch := make(chan error, 1)
 	go func() {
-		err := api.GetAndParseAniSkipData(anilistID, episodeNum, episode)
+		err := aniSkipFetcher(malID, episodeNum, episode)
 		ch <- err
 	}()
 	return ch
@@ -1113,6 +1127,7 @@ func handleUserInput(
 	episodes []models.Episode,
 	currentIndex int,
 	currentEpisodeNum int,
+	malID int,
 	anilistID int,
 	updater *discord.RichPresenceUpdater,
 	stopTracking chan struct{},
@@ -1148,9 +1163,9 @@ func handleUserInput(
 			_, _ = mpvSendCommand(socketPath, []any{"quit"})
 			return ErrBackToDownloadOptions
 		case "next":
-			return playNextEpisode(currentIndex+1, episodes, anilistID, updater, stopTracking, socketPath)
+			return playNextEpisode(currentIndex+1, episodes, malID, anilistID, updater, stopTracking, socketPath)
 		case "previous":
-			return playPreviousEpisode(currentIndex-1, episodes, anilistID, updater, stopTracking, socketPath)
+			return playPreviousEpisode(currentIndex-1, episodes, malID, anilistID, updater, stopTracking, socketPath)
 		case "quit":
 			_, _ = mpvSendCommand(socketPath, []any{"quit"})
 			return ErrUserQuit
@@ -1158,7 +1173,7 @@ func handleUserInput(
 			_, _ = mpvSendCommand(socketPath, []any{"quit"})
 			return ErrChangeAnime
 		case "select":
-			return selectEpisode(episodes, anilistID, updater, stopTracking, socketPath)
+			return selectEpisode(episodes, malID, anilistID, updater, stopTracking, socketPath)
 		case "audio":
 			selectAudioTrack(socketPath)
 		case "subtitle":
@@ -1170,25 +1185,25 @@ func handleUserInput(
 }
 
 // playNextEpisode plays next episode
-func playNextEpisode(newIndex int, episodes []models.Episode, anilistID int, updater *discord.RichPresenceUpdater, stopTracking chan struct{}, socketPath string) error {
+func playNextEpisode(newIndex int, episodes []models.Episode, malID, anilistID int, updater *discord.RichPresenceUpdater, stopTracking chan struct{}, socketPath string) error {
 	if newIndex >= len(episodes) {
 		fmt.Println("You are on the last episode")
 		return nil
 	}
-	return switchEpisode(newIndex, episodes, anilistID, updater, stopTracking, socketPath)
+	return switchEpisode(newIndex, episodes, malID, anilistID, updater, stopTracking, socketPath)
 }
 
 // playPreviousEpisode plays previous episode
-func playPreviousEpisode(newIndex int, episodes []models.Episode, anilistID int, updater *discord.RichPresenceUpdater, stopTracking chan struct{}, socketPath string) error {
+func playPreviousEpisode(newIndex int, episodes []models.Episode, malID, anilistID int, updater *discord.RichPresenceUpdater, stopTracking chan struct{}, socketPath string) error {
 	if newIndex < 0 {
 		fmt.Println("You are on the first episode")
 		return nil
 	}
-	return switchEpisode(newIndex, episodes, anilistID, updater, stopTracking, socketPath)
+	return switchEpisode(newIndex, episodes, malID, anilistID, updater, stopTracking, socketPath)
 }
 
 // selectEpisode allows selecting an episode
-func selectEpisode(episodes []models.Episode, anilistID int, updater *discord.RichPresenceUpdater, stopTracking chan struct{}, socketPath string) error {
+func selectEpisode(episodes []models.Episode, malID, anilistID int, updater *discord.RichPresenceUpdater, stopTracking chan struct{}, socketPath string) error {
 	selectedURL, selectedNumStr, err := SelectEpisodeWithFuzzyFinder(episodes)
 	if err != nil {
 		// If user selected back, return nil to continue without action
@@ -1200,7 +1215,7 @@ func selectEpisode(episodes []models.Episode, anilistID int, updater *discord.Ri
 
 	for i, ep := range episodes {
 		if ep.URL == selectedURL {
-			return switchEpisode(i, episodes, anilistID, updater, stopTracking, socketPath)
+			return switchEpisode(i, episodes, malID, anilistID, updater, stopTracking, socketPath)
 		}
 	}
 
@@ -1208,7 +1223,7 @@ func selectEpisode(episodes []models.Episode, anilistID int, updater *discord.Ri
 }
 
 // switchEpisode switches between episodes
-func switchEpisode(newIndex int, episodes []models.Episode, anilistID int, updater *discord.RichPresenceUpdater, stopTracking chan struct{}, socketPath string) error {
+func switchEpisode(newIndex int, episodes []models.Episode, malID, anilistID int, updater *discord.RichPresenceUpdater, stopTracking chan struct{}, socketPath string) error {
 	target := episodes[newIndex]
 	targetNum, err := strconv.Atoi(ExtractEpisodeNumber(target.Number))
 	if err != nil {
@@ -1263,7 +1278,7 @@ func switchEpisode(newIndex int, episodes []models.Episode, anilistID int, updat
 		newUpdater.SetEpisodeStarted(false)
 	}
 
-	return playVideo(targetURL, episodes, targetNum, anilistID, newUpdater)
+	return playVideo(targetURL, episodes, targetNum, malID, anilistID, newUpdater)
 }
 
 // skipIntro skips the intro

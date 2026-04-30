@@ -504,12 +504,26 @@ func CleanTitle(title string) string {
 	re1 := regexp.MustCompile(`(?i)[🔥🌐]?\[(?:animefire|allanime|animedrive|9anime)\]\s*`)
 	cleaned = strings.TrimSpace(re1.ReplaceAllString(cleaned, ""))
 
-	// Remove everything after em-dash or en-dash (typically subtitles like "– Todos os Episódios")
-	// This handles both em-dash (—), en-dash (–), and regular dash with spaces ( - )
+	// Remove everything after em-dash or en-dash (typically subtitles like "– Todos os Episódios").
+	// Em/en dashes are almost always used as noise separators in PT-BR scrapers.
 	reEmDash := regexp.MustCompile(`\s*[–—]\s+.*$`)
 	cleaned = strings.TrimSpace(reEmDash.ReplaceAllString(cleaned, ""))
-	reSpaceDash := regexp.MustCompile(`\s+-\s+.*$`)
-	cleaned = strings.TrimSpace(reSpaceDash.ReplaceAllString(cleaned, ""))
+
+	// For the regular hyphen ( - ) we cannot strip blindly — it appears inside legitimate
+	// titles such as "Jujutsu Kaisen: Shimetsu Kaiyuu - Zenpen" / "- Kouhen" (前編/後編,
+	// Part 1 / Part 2 on AniList). Only strip when the suffix matches known PT-BR noise
+	// or season/episode markers; otherwise keep the dash and what follows so AniList
+	// resolves the correct entry.
+	reSpaceDashNoise := regexp.MustCompile(`(?i)\s+-\s+(?:` +
+		`dublado|legendado|dual\s*[aá]udio|dub|sub|completo|` +
+		`todos\s+os\s+epis[oó]dios?|` +
+		`epis[oó]dios?\s*\d+|ep\s*\d+|` +
+		`\d+[ªº]?\s*temporada|temporada\s*\d*|` +
+		`season\s*\d+|\d+(?:st|nd|rd|th)\s*season|` +
+		`parte\s*\d+|part\s*\d+|` +
+		`allanime|animefire|animedrive|9anime|goyabu|superflix|flixhq|sflix` +
+		`).*$`)
+	cleaned = strings.TrimSpace(reSpaceDashNoise.ReplaceAllString(cleaned, ""))
 
 	// Remove content in parentheses if it contains language info (do this BEFORE removing standalone language indicators)
 	re6 := regexp.MustCompile(`(?i)\s*\([^)]*(?:dublado|legendado|dub|sub)[^)]*\)`)
@@ -569,6 +583,11 @@ func CleanTitle(title string) string {
 
 	// Remove trailing colons that may be left after removing season/part info
 	cleaned = strings.TrimSuffix(strings.TrimSpace(cleaned), ":")
+	cleaned = strings.TrimSpace(cleaned)
+
+	// Remove trailing hyphens left over when a later rule consumed noise that was
+	// preceded by " - " (e.g. "Anime - Dublado" → "Anime -" → "Anime").
+	cleaned = strings.TrimSuffix(strings.TrimSpace(cleaned), "-")
 	cleaned = strings.TrimSpace(cleaned)
 
 	// Replace hyphens with spaces (for URL-style names like "black-clover")

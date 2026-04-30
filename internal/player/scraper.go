@@ -1,6 +1,7 @@
 package player
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,7 +33,7 @@ var (
 	isNumericRe         = regexp.MustCompile(`^\d+(?:\.\d+)?$`)
 	hasLetterRe         = regexp.MustCompile(`[A-Za-z]`)
 	videoURLPatternRe   = regexp.MustCompile(`https?://[^\s<>"]+?\.(?:mp4|m3u8)`)
-	bloggerPatternRe    = regexp.MustCompile(`https://www\.blogger\.com/video\.g\?token=([A-Za-z0-9_-]+)`)
+	bloggerPatternRe    = regexp.MustCompile(`^https://www\.blogger\.com/video\.g\?token=([A-Za-z0-9_-]+)$`)
 	tokenRe             = regexp.MustCompile(`token=([A-Za-z0-9_-]+)`)
 	sidRe               = regexp.MustCompile(`"FdrFJe"\s*:\s*"([^"]+)"`)
 	bhRe                = regexp.MustCompile(`"cfb2h"\s*:\s*"([^"]+)"`)
@@ -97,9 +99,7 @@ func getContentLength(url string, client *http.Client) (int64, error) {
 		// Returns 0 and the error if the request creation fails.
 		return 0, err
 	}
-	if strings.Contains(url, "allanime.day") || strings.Contains(url, "allanime.pro") {
-		req.Header.Set("Referer", "https://allanime.to")
-	}
+	applyDownloadAuthHeaders(req, url)
 
 	// Sends the HEAD request to the server.
 	resp, err := client.Do(req) // #nosec G704
@@ -428,7 +428,14 @@ func GetVideoURLForEpisodeEnhanced(episode *models.Episode, anime *models.Anime)
 		if err == nil && resolved != "" {
 			return resolved, nil
 		}
-		// If resolution failed, fall back to the original URL so yt-dlp can try
+		// A dead Blogger token will never become live again — bubble the error
+		// up so the caller routes the user back to episode selection instead
+		// of letting the player layer redundantly resolve the same dead URL.
+		if errors.Is(err, errBloggerVideoUnavailable) {
+			return "", fmt.Errorf("video unavailable on this source: %w", err)
+		}
+		// If resolution failed for an unknown reason, fall back to the original
+		// URL so yt-dlp can have a chance.
 		util.Debug("Could not resolve intermediate URL, using as-is", "url", streamURL, "err", err)
 	}
 
@@ -640,13 +647,32 @@ func fetchContent(url string) (string, error) {
 }
 
 func findBloggerLink(content string) (string, error) {
-	matches := bloggerPatternRe.FindStringSubmatch(content)
-
-	if len(matches) > 0 {
-		return matches[0], nil
-	} else {
+	prefix := "https://www.blogger.com/video.g?token="
+	idx := strings.Index(content, prefix)
+	if idx == -1 {
 		return "", errors.New("no blogger video link found in the content")
 	}
+
+	start := idx
+	curr := idx + len(prefix)
+	for curr < len(content) {
+		c := content[curr]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
+			curr++
+		} else {
+			break
+		}
+	}
+
+	if curr > idx+len(prefix) {
+		url := content[start:curr]
+		// Validate the extracted URL with the anchored regex to satisfy security constraints
+		if bloggerPatternRe.MatchString(url) {
+			return url, nil
+		}
+	}
+
+	return "", errors.New("no blogger video link found in the content")
 }
 
 // newSurfClient creates a surf HTTP client with Chrome browser impersonation.
@@ -784,6 +810,15 @@ func extractBloggerGoogleVideoURL(bloggerURL string) (string, error) {
 	return videoURL, nil
 }
 
+// errBloggerVideoUnavailable is returned when Google's batchexecute responds
+// HTTP 200 but with an empty payload — body contains only the `)]}'`
+// anti-hijacking prefix (and optional whitespace) with no streams. This is
+// Google's signal for "this RPC produced no result", and in practice means
+// the Blogger video has been deleted, region-blocked, or the token is dead.
+// Retrying with the same token cannot recover this state, so callers should
+// fail fast and let the next-source fallback take over.
+var errBloggerVideoUnavailable = errors.New("blogger video unavailable upstream")
+
 // parseBatchexecuteResponse extracts the best MP4 video URL from a Google
 // batchexecute API response body (WcwnYd RPC).
 //
@@ -796,6 +831,11 @@ func extractBloggerGoogleVideoURL(bloggerURL string) (string, error) {
 // The fix iterates every index of data[] looking for the first element that is
 // itself an array of arrays (the streams list). A regex fallback is also
 // applied over the raw body in case structured parsing fails entirely.
+//
+// Fix 2026-04-28: distinguish "empty response" (token dead upstream — the body
+// is just `)]}'\n`) from "structured response we failed to parse" so callers
+// can fast-fail dead tokens instead of burning 6 retries (3 in scraper +
+// 3 in player layer) on a guaranteed-failure code path.
 func parseBatchexecuteResponse(body []byte) (string, error) {
 	var videoURL string
 	for line := range strings.SplitSeq(string(body), "\n") {
@@ -881,7 +921,14 @@ func parseBatchexecuteResponse(body []byte) (string, error) {
 	}
 
 	if videoURL == "" {
-		util.Debugf("Blogger batchexecute response body (first 500 bytes): %s", string(body[:min(500, len(body))]))
+		// Strip Google's anti-hijacking prefix and surrounding whitespace; if
+		// nothing remains, the RPC returned no payload — token is dead upstream.
+		stripped := bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(body), []byte(")]}'")))
+		if len(stripped) == 0 {
+			util.Debugf("Blogger batchexecute returned empty body (%d bytes total) — token unavailable upstream", len(body))
+			return "", errBloggerVideoUnavailable
+		}
+		util.Debugf("Blogger batchexecute response body (%d bytes, first 500): %s", len(body), string(body[:min(500, len(body))]))
 		return "", errors.New("no video URL found in batchexecute response")
 	}
 	return videoURL, nil
@@ -906,6 +953,14 @@ func extractBloggerVideoURL(bloggerURL string) (string, error) {
 			return proxyURL, nil
 		}
 		lastErr = err
+		// A dead Blogger token (HTTP 200 + empty body from batchexecute) is
+		// not transient — retrying cannot resurrect a deleted/region-blocked
+		// video, and previously this burned ~3s here plus another ~3s in the
+		// player layer's redundant resolve.
+		if errors.Is(err, errBloggerVideoUnavailable) {
+			util.Debugf("Blogger token unavailable upstream — skipping remaining retries")
+			return "", err
+		}
 		if attempt < maxRetries {
 			util.Debugf("Blogger extraction attempt %d/%d failed: %v, retrying...", attempt, maxRetries, err)
 			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
@@ -1118,6 +1173,15 @@ func extractActualVideoURL(videoSrc string) (string, error) {
 			util.Debugf("Found animefire.io video URL, fetching content...")
 		}
 
+		// lightspeedst.net (AnimeFire CDN) requires Referer: https://animefire.io to authorise
+		// token-signed requests. Without it, mpv/yt-dlp get HTTP 401 Unauthorized while the
+		// browser (which sends the referer automatically) plays the same URL fine. Set it
+		// here so appendPlaybackRefererArgs propagates it to mpv on the play path, mirroring
+		// the existing download.go logic.
+		if util.GetGlobalReferer() == "" {
+			util.SetGlobalReferer("https://animefire.io")
+		}
+
 		// Fetch the video page
 		response, err := api.SafeGet(videoSrc)
 		if err != nil {
@@ -1165,48 +1229,42 @@ func extractActualVideoURL(videoSrc string) (string, error) {
 				}
 			}
 
-			// Prompt user for quality selection
-			// Create items list with back option first
-			type qualityOption struct {
-				Label string
-				Value string
-			}
-			var qualityItems []qualityOption
-			qualityItems = append(qualityItems, qualityOption{Label: "← Back", Value: "back"})
-			for _, v := range videoResponse.Data {
-				label := v.Label
-				if label == "" {
-					label = v.Src
-				}
-				qualityItems = append(qualityItems, qualityOption{Label: label, Value: v.Src})
-			}
+			// Prompt user for quality selection. The picker stays on
+			// go-fuzzyfinder; a prior huh.Select migration regressed
+			// rendering ("piorou") in the user's terminal. Logic fixes
+			// (descending sort, mirror-N disambiguation, friendly fallback
+			// labels, ErrAbort routing, index-based selection) live in
+			// buildAnimeFireQualityItems and are pinned by
+			// animefire_quality_menu_test.go.
+			sortedData, qualityLabels := buildAnimeFireQualityItems(videoResponse.Data)
 
-			// Present quality options to the user
-			qIdx, err := tui.Find(qualityItems, func(i int) string {
-				return qualityItems[i].Label
+			qIdx, err := tui.Find(qualityLabels, func(i int) string {
+				return qualityLabels[i]
 			}, fuzzyfinder.WithPromptString("Select Video Quality: "))
 			if err != nil {
+				if errors.Is(err, fuzzyfinder.ErrAbort) {
+					return "", ErrBackRequested
+				}
 				return "", fmt.Errorf("failed to select quality: %w", err)
 			}
-
-			selectedSrc := qualityItems[qIdx].Value
-
-			// Handle back selection
-			if selectedSrc == "back" {
-				return "", ErrBackRequested
+			if qIdx < 0 || qIdx >= len(sortedData) {
+				return "", fmt.Errorf("invalid quality selection: index %d out of range", qIdx)
 			}
+			picked := sortedData[qIdx]
+			selectedSrc := picked.Src
 
-			// Store the selected quality for future use in this session
+			// Store the selected quality for future use in this session.
+			// Persist a canonical "Np" form so selectQualityFromOptions can
+			// match it deterministically next time, even if the upstream
+			// label changes (e.g. "FHD" → "1080p").
 			if util.GlobalQuality == "" || util.GlobalQuality == "best" {
-				// Extract quality label from selected option
-				for _, v := range videoResponse.Data {
-					if v.Src == selectedSrc {
-						util.GlobalQuality = strings.ToLower(v.Label)
-						if util.IsDebug {
-							util.Debugf("Storing selected quality for session: %s", util.GlobalQuality)
-						}
-						break
-					}
+				if res := extractResolution(picked.Label); res > 0 {
+					util.GlobalQuality = fmt.Sprintf("%dp", res)
+				} else {
+					util.GlobalQuality = strings.ToLower(strings.TrimSpace(picked.Label))
+				}
+				if util.IsDebug {
+					util.Debugf("Storing selected quality for session: %s", util.GlobalQuality)
 				}
 			}
 
@@ -1245,6 +1303,41 @@ func extractActualVideoURL(videoSrc string) (string, error) {
 
 	// If not JSON or no qualities found, return an error
 	return "", errors.New("no valid video URL found")
+}
+
+// buildAnimeFireQualityItems sorts AnimeFire video sources highest-quality
+// first and renders unambiguous, user-friendly labels.
+//
+// Rules:
+//   - parsed resolution from VideoData.Label (e.g. "FHD" / "1080p" → 1080)
+//     is the sort key, descending.
+//   - sources whose resolution can't be parsed render as "Auto" so the
+//     menu never shows an empty or raw URL string.
+//   - duplicate labels get a "(mirror N)" suffix so the fuzzyfinder index
+//     aligns 1:1 with the returned slice and the user's pick is unambiguous.
+func buildAnimeFireQualityItems(videoData []VideoData) ([]VideoData, []string) {
+	sorted := append([]VideoData(nil), videoData...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return extractResolution(sorted[i].Label) > extractResolution(sorted[j].Label)
+	})
+
+	labels := make([]string, len(sorted))
+	seen := make(map[string]int, len(sorted))
+	for i, v := range sorted {
+		base := "Auto"
+		if res := extractResolution(v.Label); res > 0 {
+			base = fmt.Sprintf("%dp", res)
+		} else if trimmed := strings.TrimSpace(v.Label); trimmed != "" {
+			base = trimmed
+		}
+		seen[base]++
+		if seen[base] > 1 {
+			labels[i] = fmt.Sprintf("%s (mirror %d)", base, seen[base])
+		} else {
+			labels[i] = base
+		}
+	}
+	return sorted, labels
 }
 
 // selectQualityFromOptions selects the best matching quality from available options

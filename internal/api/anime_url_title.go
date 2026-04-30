@@ -22,6 +22,10 @@ var ptbrURLSuffixes = regexp.MustCompile(
 	`(?i)(?:-(?:dublado|legendado|online|hd|completo|todos-os-episodios))+(?:-\d+)?$`,
 )
 
+// aniListEndpoint is the GraphQL URL used by FetchAnimeFromAniListWithURL.
+// Exposed as a package var so tests can redirect requests to an httptest.Server.
+var aniListEndpoint = "https://graphql.anilist.co"
+
 // extractRomajiFromURL extracts a romaji anime title from a Goyabu or AnimeFire URL slug.
 //
 // Brazilian anime sites use romaji-based URL slugs:
@@ -152,7 +156,7 @@ func FetchAnimeFromAniListWithURL(animeName, animeURL string) (*models.AniListRe
 			continue
 		}
 
-		resp, err := httpPostFast("https://graphql.anilist.co", jsonData)
+		resp, err := httpPostFast(aniListEndpoint, jsonData)
 		if err != nil {
 			lastErr = fmt.Errorf("AniList request failed: %w", err)
 			continue

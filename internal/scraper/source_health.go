@@ -4,7 +4,7 @@ package scraper
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/alvarorichard/Goanime/internal/models"
@@ -50,9 +50,7 @@ func (sm *ScraperManager) AvailableSources() []ScraperType {
 	for source := range sm.scrapers {
 		sources = append(sources, source)
 	}
-	sort.Slice(sources, func(i, j int) bool {
-		return sources[i] < sources[j]
-	})
+	slices.Sort(sources)
 	return sources
 }
 

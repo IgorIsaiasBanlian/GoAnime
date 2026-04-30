@@ -56,8 +56,8 @@ func assertEnvValue(t *testing.T, env []string, key, want string) {
 	t.Helper()
 	prefix := key + "="
 	for _, item := range env {
-		if strings.HasPrefix(item, prefix) {
-			if got := strings.TrimPrefix(item, prefix); got != want {
+		if after, ok := strings.CutPrefix(item, prefix); ok {
+			if got := after; got != want {
 				t.Fatalf("%s = %q, want %q", key, got, want)
 			}
 			return

@@ -2,12 +2,16 @@
 package scraper
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -524,6 +528,11 @@ func (c *GoyabuClient) GetEpisodeStreamURL(episodeURL string) (string, error) {
 
 	pageHTML := string(body)
 
+	util.Debug("Goyabu episode page fetched",
+		"status", resp.StatusCode,
+		"contentType", resp.Header.Get("Content-Type"),
+		"bodyBytes", len(body))
+
 	// Strategy 1: Look for direct video URL in the page
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(pageHTML))
 	if err == nil {
@@ -533,35 +542,47 @@ func (c *GoyabuClient) GetEpisodeStreamURL(episodeURL string) (string, error) {
 
 		// Check for iframe with video embed
 		if src, exists := doc.Find("iframe").Attr("src"); exists && src != "" {
+			util.Debug("Goyabu strategy 1 hit: iframe", "src", src)
 			return validateStreamURL(src, "Goyabu")
 		}
 
 		// Check for video element
 		if src, exists := doc.Find("video source").Attr("src"); exists && src != "" {
+			util.Debug("Goyabu strategy 1 hit: video source", "src", src)
 			return validateStreamURL(src, "Goyabu")
 		}
 		if src, exists := doc.Find("video[data-video-src]").Attr("data-video-src"); exists && src != "" {
+			util.Debug("Goyabu strategy 1 hit: video[data-video-src]", "src", src)
 			return validateStreamURL(src, "Goyabu")
 		}
+		util.Debug("Goyabu strategy 1 miss: no iframe/video element in DOM")
+	} else {
+		util.Debug("Goyabu HTML parse failed", "error", err)
 	}
 
 	// Strategy 2: Extract playersData JSON and decode blogger token via AJAX
 	bloggerToken, bloggerURL := c.extractPlayerData(pageHTML)
+	util.Debug("Goyabu strategy 2 player data",
+		"hasToken", bloggerToken != "",
+		"hasBloggerURL", bloggerURL != "")
 	if bloggerToken != "" {
 		streamURL, err := c.decodeBloggerToken(bloggerToken)
 		if err == nil && streamURL != "" {
+			util.Debug("Goyabu strategy 2 hit: decoded blogger token", "url", streamURL)
 			return streamURL, nil
 		}
 		util.Debug("Blogger token decode failed", "error", err)
 	}
 
 	// Strategy 3: Look for direct video URLs in script tags
-	for _, re := range goyabuVideoPatterns {
+	for i, re := range goyabuVideoPatterns {
 		matches := re.FindStringSubmatch(pageHTML)
 		if len(matches) >= 2 {
+			util.Debug("Goyabu strategy 3 hit: video URL pattern", "patternIdx", i, "url", matches[1])
 			return validateStreamURL(matches[1], "Goyabu")
 		}
 	}
+	util.Debug("Goyabu strategy 3 miss: no video URL patterns matched")
 
 	// Strategy 4: Return Blogger embed URL as last resort (video player can handle it)
 	if bloggerURL != "" {
@@ -569,7 +590,60 @@ func (c *GoyabuClient) GetEpisodeStreamURL(episodeURL string) (string, error) {
 		return validateStreamURL(bloggerURL, "Goyabu")
 	}
 
+	c.dumpEpisodePageDiagnostic(episodeURL, body, resp)
 	return "", fmt.Errorf("could not find stream URL in episode page")
+}
+
+// dumpEpisodePageDiagnostic emits a one-shot diagnostic when every stream
+// extraction strategy has failed: marker presence, body fingerprint, and
+// (in debug mode) a dump path so the user can inspect the actual HTML.
+func (c *GoyabuClient) dumpEpisodePageDiagnostic(episodeURL string, body []byte, resp *http.Response) {
+	if !util.IsDebug {
+		return
+	}
+
+	pageHTML := string(body)
+	lower := strings.ToLower(pageHTML)
+
+	markers := []struct {
+		name    string
+		needle  string
+		present bool
+	}{
+		{"playersData", "playersdata", false},
+		{"blogger_token", "blogger_token", false},
+		{"admin-ajax", "admin-ajax.php", false},
+		{"<iframe", "<iframe", false},
+		{"<video", "<video", false},
+		{"jwplayer", "jwplayer", false},
+		{"hls.js", "hls.js", false},
+		{".m3u8", ".m3u8", false},
+		{".mp4", ".mp4", false},
+		{"cloudflare", "cloudflare", false},
+		{"cf-error", "cf-error", false},
+		{"just a moment", "just a moment", false},
+	}
+	for i := range markers {
+		markers[i].present = strings.Contains(lower, markers[i].needle)
+	}
+
+	keyvals := []any{"url", episodeURL, "bodyBytes", len(body)}
+	for _, m := range markers {
+		keyvals = append(keyvals, m.name, m.present)
+	}
+	util.Debug("Goyabu stream extraction failed — markers", keyvals...)
+
+	hash := sha256.Sum256([]byte(episodeURL))
+	dumpName := fmt.Sprintf("goanime_goyabu_%s_%d.html", hex.EncodeToString(hash[:6]), time.Now().Unix())
+	dumpPath := filepath.Join(os.TempDir(), dumpName)
+	if err := os.WriteFile(dumpPath, body, 0600); err != nil {
+		util.Debug("Goyabu diagnostic dump failed", "error", err)
+		return
+	}
+	util.Debug("Goyabu diagnostic dump written",
+		"path", dumpPath,
+		"status", resp.StatusCode,
+		"contentType", resp.Header.Get("Content-Type"))
 }
 
 // extractPlayerData extracts the blogger_token and Blogger embed URL from the page.
@@ -585,7 +659,18 @@ func (c *GoyabuClient) extractPlayerData(html string) (token, bloggerURL string)
 			token = players[0].BloggerToken
 			bloggerURL = players[0].URL
 			util.Debug("Extracted playersData", "hasToken", token != "", "hasURL", bloggerURL != "")
+		} else {
+			snippet := matches[1]
+			if len(snippet) > 200 {
+				snippet = snippet[:200] + "..."
+			}
+			util.Debug("Goyabu playersData regex matched but unmarshal failed",
+				"error", err,
+				"playerCount", len(players),
+				"rawSnippet", snippet)
 		}
+	} else {
+		util.Debug("Goyabu playersData regex did not match")
 	}
 
 	// Fallback: extract blogger_token from other patterns if not found

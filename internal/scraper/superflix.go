@@ -162,13 +162,24 @@ func (c *SuperFlixClient) SearchMedia(query string) ([]*SuperFlixMedia, error) {
 
 // SearchMediaWithContext searches with context support
 func (c *SuperFlixClient) SearchMediaWithContext(ctx context.Context, query string) ([]*SuperFlixMedia, error) {
-	cacheKey := strings.ToLower(strings.TrimSpace(query))
+	// CLI args arrive hyphenated like "the-boys" (TreatingAnimeName joins
+	// words with dashes), but SuperFlix's search engine treats the dash as
+	// a literal character and returns "Nenhum resultado encontrado".
+	// Restore spaces so titles like "The Boys" actually match.
+	normalized := strings.TrimSpace(query)
+	normalized = strings.ReplaceAll(normalized, "-", " ")
+	normalized = strings.ReplaceAll(normalized, "_", " ")
+	for strings.Contains(normalized, "  ") {
+		normalized = strings.ReplaceAll(normalized, "  ", " ")
+	}
+
+	cacheKey := strings.ToLower(normalized)
 	if cached, ok := c.searchCache.Load(cacheKey); ok {
 		return cached.([]*SuperFlixMedia), nil
 	}
 
-	searchURL := fmt.Sprintf("%s/pesquisar?s=%s", c.baseURL, url.QueryEscape(query))
-	util.Debug("SuperFlix search", "query", query, "url", searchURL)
+	searchURL := fmt.Sprintf("%s/pesquisar?s=%s", c.baseURL, url.QueryEscape(normalized))
+	util.Debug("SuperFlix search", "query", query, "normalized", normalized, "url", searchURL)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
 	if err != nil {

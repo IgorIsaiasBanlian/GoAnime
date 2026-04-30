@@ -303,10 +303,18 @@ func (sm *ScraperManager) searchWithTimeout(ctx context.Context, st ScraperType,
 		timer.Stop()
 		util.PerfCount("search_timeout:" + sourceName)
 		util.Debug("Search timeout", "source", sourceName)
+
+		timeoutErr := fmt.Errorf("search timed out after %v", perScraperTimeout)
+		// If we know the source's base URL, run a quick probe so the
+		// resulting diagnostic can distinguish "site is dead" (e.g.
+		// Cloudflare 522) from "site is just slow today".
+		enrichedErr := EnrichTimeoutWithProbe(ctx, sourceName, "search",
+			sm.getScraperBaseURL(st), timeoutErr, originProbeBudget)
+
 		return searchResult{
 			scraperType: st,
 			results:     nil,
-			err:         fmt.Errorf("search timed out after %v", perScraperTimeout),
+			err:         enrichedErr,
 		}
 	}
 }
@@ -517,6 +525,28 @@ func (sm *ScraperManager) GetScraper(scraperType ScraperType) (UnifiedScraper, e
 	}
 	return nil, fmt.Errorf("scraper type %v not found", scraperType)
 }
+
+// getScraperBaseURL returns the homepage URL for sources we can reach over plain
+// HTTP — used by the post-timeout probe to surface "Cloudflare 522/origin down"
+// instead of the generic "search timed out". Returns "" for sources that have
+// no probable HTML root (GraphQL endpoints, opaque APIs, etc.).
+func (sm *ScraperManager) getScraperBaseURL(scraperType ScraperType) string {
+	switch scraperType {
+	case FlixHQType:
+		return FlixHQBase
+	case SFlixType:
+		return SFlixBase
+	case NineAnimeType:
+		return NineAnimeBase
+	default:
+		return ""
+	}
+}
+
+// originProbeBudget bounds how long the post-timeout origin probe is allowed
+// to add on top of an already-timed-out search. Kept short so the user does
+// not pay much extra latency just to learn whether the site is dead.
+var originProbeBudget = 3 * time.Second
 
 // getScraperDisplayName returns a Portuguese display name for the scraper type
 func (sm *ScraperManager) getScraperDisplayName(scraperType ScraperType) string {

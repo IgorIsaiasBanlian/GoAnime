@@ -438,6 +438,74 @@ func TestCleanTitle_PreservesValidTitles(t *testing.T) {
 	}
 }
 
+// TestCleanTitle_PreservesMeaningfulDashSuffixes guards against the regression
+// where CleanTitle stripped everything after " - ", confusing AniList between
+// titles that share a prefix and only differ by their dash-suffixed part marker
+// (Zenpen 前編 / Kouhen 後編 — AniList IDs 172463 and 209895).
+func TestCleanTitle_PreservesMeaningfulDashSuffixes(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "preserves - Zenpen (Part 1 marker)",
+			input:    "[PT-BR] Jujutsu Kaisen: Shimetsu Kaiyuu - Zenpen",
+			expected: "Jujutsu Kaisen: Shimetsu Kaiyuu - Zenpen",
+		},
+		{
+			name:     "preserves - Kouhen (Part 2 marker)",
+			input:    "[PT-BR] Jujutsu Kaisen: Shimetsu Kaiyuu - Kouhen",
+			expected: "Jujutsu Kaisen: Shimetsu Kaiyuu - Kouhen",
+		},
+		{
+			name:     "preserves arbitrary subtitle after dash",
+			input:    "Fate/stay night - Unlimited Blade Works",
+			expected: "Fate/stay night - Unlimited Blade Works",
+		},
+		{
+			name:     "still strips - Dublado noise",
+			input:    "[PT-BR] One Piece - Dublado",
+			expected: "One Piece",
+		},
+		{
+			name:     "still strips - Legendado noise",
+			input:    "Bleach - Legendado",
+			expected: "Bleach",
+		},
+		{
+			name:     "still strips - Todos os Episodios",
+			input:    "Naruto - Todos os Episodios",
+			expected: "Naruto",
+		},
+		{
+			name:     "still strips - Episodio NN",
+			input:    "Demon Slayer - Episodio 12",
+			expected: "Demon Slayer",
+		},
+		{
+			name:     "still strips - Temporada N",
+			input:    "Jujutsu Kaisen - Temporada 2",
+			expected: "Jujutsu Kaisen",
+		},
+		{
+			name:     "still strips - Parte N",
+			input:    "Attack on Titan - Parte 3",
+			expected: "Attack on Titan",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := CleanTitle(tc.input)
+			assert.Equal(t, tc.expected, result, "CleanTitle(%q) should equal %q", tc.input, tc.expected)
+		})
+	}
+}
+
 // TestCleanTitle_NineAnimeSources tests that CleanTitle properly handles
 // anime titles from 9Anime with multilanguage tags and episode info.
 func TestCleanTitle_NineAnimeSources(t *testing.T) {
