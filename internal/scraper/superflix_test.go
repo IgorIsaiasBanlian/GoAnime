@@ -164,6 +164,12 @@ func TestExtractEpisodes(t *testing.T) {
 			html:      `var ALL_EPISODES = {};`,
 			expectNil: true, // regex requires at least one char between { and }
 		},
+		{
+			name:         "filters missing, null, and future air_dates",
+			html:         fmt.Sprintf(`var ALL_EPISODES = {"1":[{"epi_num":"1","title":"Valid","air_date":"2020-01-15"},{"epi_num":"2","title":"Missing","air_date":""},{"epi_num":"3","title":"Null","air_date":"null"},{"epi_num":"4","title":"Future","air_date":"%s"}]};`, time.Now().Add(48*time.Hour).Format("2006-01-02")),
+			expectKeys:   []string{"1"},
+			expectCounts: map[string]int{"1": 1},
+		},
 	}
 
 	client := NewSuperFlixClient()
@@ -1034,8 +1040,9 @@ func TestGetVideoAPI_NoStreamURL(t *testing.T) {
 func TestGetVideoAPI_InvalidJSON(t *testing.T) {
 	t.Parallel()
 
+	// Non-JSON, non-HTML body still surfaces a JSON decode error.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `<html>Error</html>`)
+		fmt.Fprint(w, `{not json`)
 	}))
 	defer srv.Close()
 
@@ -1954,4 +1961,244 @@ func TestRegexPatterns(t *testing.T) {
 		assert.Equal(t, "Portuguese", match[1])
 		assert.Equal(t, "https://subs.example.com/pt.vtt", match[2])
 	})
+}
+
+// =============================================================================
+// Regression tests (added 2026-04-30)
+//
+// Context: SuperFlix moved from `superflixapi.rest` to `superflixapi.online`
+// using a server-side 301 redirect. Go's http.Client follows the redirect but
+// downgrades the POST to a GET (dropping the body), so /player/bootstrap
+// returned an HTML 404 page. The JSON decoder then surfaced the cryptic
+// `invalid character '<' looking for beginning of value`, breaking playback.
+// These tests pin (a) the canonical base URL and (b) that an HTML/non-2xx
+// response from the player API produces a clear, actionable error rather
+// than the cryptic JSON decode error.
+// =============================================================================
+
+func TestSuperFlixBase_PointsToOnlineHost_2026_04_30(t *testing.T) {
+	t.Parallel()
+	// Pinning the canonical host. If this needs to change in the future,
+	// also update internal/api/providers/metadata/metadata.go.
+	assert.Equal(t, "https://superflixapi.online", SuperFlixBase)
+}
+
+func TestBootstrap_HTMLResponseSurfacesActionableError_2026_04_30(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `<!DOCTYPE html><html><head><title>Not Found</title></head><body>404</body></html>`)
+	}))
+	defer srv.Close()
+
+	client := newTestSuperFlixClient(srv.URL)
+	tokens := &SuperFlixTokens{CSRF: "a", PageToken: "b", ContentID: "1", ContentType: "filme"}
+	_, err := client.Bootstrap(context.Background(), tokens)
+
+	require.Error(t, err)
+	// Must NOT leak the cryptic JSON decode error.
+	assert.NotContains(t, err.Error(), "invalid character '<'")
+	// Must surface the real cause: HTML body with status code in context.
+	assert.Contains(t, err.Error(), "bootstrap")
+	assert.Contains(t, err.Error(), "HTML")
+	assert.Contains(t, err.Error(), "404")
+}
+
+func TestGetSourceURL_HTMLResponseSurfacesActionableError_2026_04_30(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `<html><body>blocked</body></html>`)
+	}))
+	defer srv.Close()
+
+	client := newTestSuperFlixClient(srv.URL)
+	tokens := &SuperFlixTokens{CSRF: "a", PageToken: "b"}
+	_, err := client.GetSourceURL(context.Background(), "vid", tokens)
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "invalid character '<'")
+	assert.Contains(t, err.Error(), "source")
+	assert.Contains(t, err.Error(), "HTML")
+	assert.Contains(t, err.Error(), "403")
+}
+
+func TestGetVideoAPI_HTMLResponseSurfacesActionableError_2026_04_30(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<html><body>captcha</body></html>`)
+	}))
+	defer srv.Close()
+
+	client := newTestSuperFlixClient(srv.URL)
+	_, _, err := client.GetVideoAPI(context.Background(), srv.URL, "hash", srv.URL+"/")
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "invalid character '<'")
+	assert.Contains(t, err.Error(), "video API")
+	assert.Contains(t, err.Error(), "HTML")
+}
+
+// Some upstream players (firevideoplayer.com behind llanfairpwllgwyngy.com)
+// serve real JSON with `Content-Type: text/html; charset=utf-8`. Trusting the
+// header alone would reject these valid responses. The body sniff is the
+// source of truth.
+func TestGetVideoAPI_AcceptsJSONBodyWithHTMLContentType_2026_04_30(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `{"hls":true,"securedLink":"https://example.com/master.m3u8","videoSource":"https://example.com/master.txt","videoImage":"https://example.com/thumb.jpg"}`)
+	}))
+	defer srv.Close()
+
+	client := newTestSuperFlixClient(srv.URL)
+	streamURL, thumb, err := client.GetVideoAPI(context.Background(), srv.URL, "hash", srv.URL+"/")
+
+	require.NoError(t, err)
+	assert.Equal(t, "https://example.com/master.m3u8", streamURL)
+	assert.Equal(t, "https://example.com/thumb.jpg", thumb)
+}
+
+func TestBootstrap_AcceptsJSONBodyWithHTMLContentType_2026_04_30(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `{"data":{"options":[{"ID":"sv1","name":"Server 1"}]}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestSuperFlixClient(srv.URL)
+	tokens := &SuperFlixTokens{CSRF: "a", PageToken: "b", ContentID: "1", ContentType: "filme"}
+	servers, err := client.Bootstrap(context.Background(), tokens)
+
+	require.NoError(t, err)
+	require.Len(t, servers, 1)
+	assert.Equal(t, "Server 1", servers[0].Name)
+}
+
+func TestEnsureJSONResponse_BlankBodyWithBadStatus_2026_04_30(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		// Empty body — JSON decode would also fail with EOF; ensure the
+		// status-code path produces a useful error first.
+	}))
+	defer srv.Close()
+
+	client := newTestSuperFlixClient(srv.URL)
+	tokens := &SuperFlixTokens{CSRF: "a", PageToken: "b", ContentID: "1", ContentType: "filme"}
+	_, err := client.Bootstrap(context.Background(), tokens)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "500")
+}
+
+// Regression test (added 2026-05-02)
+//
+// Episode air_date filter must not depend on the time-of-day in `now`. A
+// previous version used `t.After(now.Add(24*time.Hour))`, which let
+// tomorrow's episodes leak through whenever `now`'s UTC time-of-day was
+// past 00:00 — i.e. for any caller in a timezone west of UTC, every
+// evening reproduced a 1-day-of-leak window. Pin two boundary cases on
+// a fixed clock so neither timezone nor wall-clock drift can hide a
+// regression:
+//   1. now=2026-05-02 03:30 UTC, ep.air_date=2026-05-03 → must be filtered
+//   2. now=2026-05-02 03:30 UTC, ep.air_date=2026-05-02 → must be kept
+func TestFilterEpisodesByAirDate_TomorrowIsNotKept_2026_05_02(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 2, 3, 30, 0, 0, time.UTC)
+	episodes := map[string][]SuperFlixEpisode{
+		"1": {
+			{EpiNum: json.Number("1"), Title: "Today", AirDate: "2026-05-02"},
+			{EpiNum: json.Number("2"), Title: "Tomorrow", AirDate: "2026-05-03"},
+			{EpiNum: json.Number("3"), Title: "WayPast", AirDate: "2020-01-15"},
+			{EpiNum: json.Number("4"), Title: "Empty", AirDate: ""},
+			{EpiNum: json.Number("5"), Title: "Null", AirDate: "null"},
+		},
+	}
+
+	got := filterEpisodesByAirDate(episodes, now)
+	require.Len(t, got["1"], 2, "should keep only Today and WayPast")
+
+	titles := []string{got["1"][0].Title, got["1"][1].Title}
+	assert.Contains(t, titles, "Today")
+	assert.Contains(t, titles, "WayPast")
+	assert.NotContains(t, titles, "Tomorrow", "future air_date must be filtered regardless of UTC time-of-day")
+}
+
+// Regression test (added 2026-05-02)
+//
+// Same boundary as above, but exercised through a non-UTC `now` to prove
+// the filter normalizes to UTC internally. BRT (UTC-3) at 23:30 local on
+// 2026-05-01 == 02:30 UTC on 2026-05-02, so episodes with air_date
+// 2026-05-03 are still tomorrow-in-UTC and must be filtered.
+func TestFilterEpisodesByAirDate_NonUTCNow_2026_05_02(t *testing.T) {
+	t.Parallel()
+
+	brt := time.FixedZone("BRT", -3*60*60)
+	now := time.Date(2026, 5, 1, 23, 30, 0, 0, brt) // == 2026-05-02 02:30 UTC
+	episodes := map[string][]SuperFlixEpisode{
+		"1": {
+			{EpiNum: json.Number("1"), Title: "TodayUTC", AirDate: "2026-05-02"},
+			{EpiNum: json.Number("2"), Title: "TomorrowUTC", AirDate: "2026-05-03"},
+		},
+	}
+
+	got := filterEpisodesByAirDate(episodes, now)
+	require.Len(t, got["1"], 1)
+	assert.Equal(t, "TodayUTC", got["1"][0].Title)
+}
+
+// Regression test (added 2026-05-01)
+//
+// Naruto S2E5 on SuperFlix is a placeholder episode (`air_date: null`,
+// title "Episódio 5"); /player/bootstrap returns `{"data":{"options":[]}}`
+// for it. Before this fix the user saw a generic "no servers available"
+// error that looked like a system bug. Pin three things:
+//  1. ErrSuperFlixNoServers wraps the empty-options condition
+//  2. The error message includes the player URL and contentid for triage
+//  3. Real responses with servers still succeed (no false positives)
+func TestGetStreamURL_EmptyBootstrapOptionsReturnsTypedError_2026_05_01(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/serie/46260/2/5", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<html><head><title>Player</title></head><body>
+			<script>
+			var CSRF_TOKEN = "csrf123";
+			var PAGE_TOKEN = "pt456";
+			var INITIAL_CONTENT_ID = 999914;
+			var CONTENT_TYPE = "serie";
+			</script>
+		</body></html>`)
+	})
+	mux.HandleFunc("/player/bootstrap", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"data":{"options":[],"flags":{"mp4_active":false}}}`)
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client := newTestSuperFlixClient(srv.URL)
+	_, err := client.GetStreamURL(context.Background(), "serie", "46260", "2", "5")
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrSuperFlixNoServers,
+		"empty bootstrap options must produce ErrSuperFlixNoServers so callers can distinguish content-unavailability from system errors")
+	msg := err.Error()
+	assert.Contains(t, msg, "/serie/46260/2/5", "error must include the player path for triage")
+	assert.Contains(t, msg, "contentid=999914", "error must include the contentid that returned no servers")
 }

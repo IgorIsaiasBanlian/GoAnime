@@ -4,6 +4,7 @@ package scraper
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,8 +20,19 @@ import (
 	"github.com/alvarorichard/Goanime/internal/util"
 )
 
+// ErrSuperFlixNoServers is returned when /player/bootstrap responds with an
+// empty options list. This is a content-availability signal from SuperFlix
+// (the upstream JS shows a "not yet released" screen in the same case), not
+// a system or scraping error — callers should surface it to the user as
+// "this episode has no source on SuperFlix" rather than retrying.
+var ErrSuperFlixNoServers = errors.New("superflix: no servers available for this content")
+
 const (
-	SuperFlixBase      = "https://superflixapi.rest"
+	// SuperFlixBase is the canonical SuperFlix host. The legacy
+	// `superflixapi.rest` host now 301-redirects here; Go's http.Client follows
+	// the redirect but downgrades the POST to a GET (dropping the body), which
+	// makes /player/bootstrap return HTML 404 and break JSON decoding.
+	SuperFlixBase      = "https://superflixapi.online"
 	SuperFlixUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
@@ -249,11 +261,12 @@ func (c *SuperFlixClient) parseCards(doc *goquery.Document) []*SuperFlixMedia {
 		card.Find("button").Each(func(_ int, btn *goquery.Selection) {
 			msg, _ := btn.Attr("data-msg")
 			copyVal, _ := btn.Attr("data-copy")
-			if strings.Contains(msg, "TMDB") {
+			switch {
+			case strings.Contains(msg, "TMDB"):
 				tmdbID = copyVal
-			} else if strings.Contains(msg, "IMDB") {
+			case strings.Contains(msg, "IMDB"):
 				imdbID = copyVal
-			} else if strings.Contains(msg, "Link") {
+			case strings.Contains(msg, "Link"):
 				linkURL = copyVal
 			}
 		})
@@ -394,7 +407,36 @@ func (c *SuperFlixClient) ExtractEpisodes(html string) (map[string][]SuperFlixEp
 	if err := json.Unmarshal([]byte(m[1]), &result); err != nil {
 		return nil, fmt.Errorf("failed to parse ALL_EPISODES: %w", err)
 	}
-	return result, nil
+
+	return filterEpisodesByAirDate(result, time.Now()), nil
+}
+
+// filterEpisodesByAirDate drops episodes with empty/"null" air_date and
+// episodes whose air_date is strictly after the current UTC day.
+//
+// Comparison is done at day granularity in UTC so the result does not drift
+// across midnight: a previous version used `t.After(now.Add(24*time.Hour))`,
+// which kept tomorrow's episodes any time `now`'s UTC time-of-day was past
+// 00:00 — flaky for any caller running with `now` in a timezone west of UTC.
+func filterEpisodesByAirDate(result map[string][]SuperFlixEpisode, now time.Time) map[string][]SuperFlixEpisode {
+	utcNow := now.UTC()
+	today := time.Date(utcNow.Year(), utcNow.Month(), utcNow.Day(), 0, 0, 0, 0, time.UTC)
+	for season, episodes := range result {
+		var validEpisodes []SuperFlixEpisode
+		for _, ep := range episodes {
+			if ep.AirDate == "" || ep.AirDate == "null" {
+				continue
+			}
+			if t, err := time.Parse("2006-01-02", ep.AirDate); err == nil {
+				if t.After(today) {
+					continue
+				}
+			}
+			validEpisodes = append(validEpisodes, ep)
+		}
+		result[season] = validEpisodes
+	}
+	return result
 }
 
 // Bootstrap calls /player/bootstrap to get server list
@@ -429,6 +471,10 @@ func (c *SuperFlixClient) Bootstrap(ctx context.Context, tokens *SuperFlixTokens
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if err := ensureJSONResponse("bootstrap", resp, body); err != nil {
+		return nil, err
 	}
 
 	var result struct {
@@ -475,6 +521,10 @@ func (c *SuperFlixClient) GetSourceURL(ctx context.Context, videoID string, toke
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if err := ensureJSONResponse("source", resp, body); err != nil {
+		return "", err
 	}
 
 	var result struct {
@@ -621,6 +671,10 @@ func (c *SuperFlixClient) GetVideoAPI(ctx context.Context, playerBaseURL, videoH
 		return "", "", fmt.Errorf("failed to read response: %w", err)
 	}
 
+	if err := ensureJSONResponse("video API", resp, body); err != nil {
+		return "", "", err
+	}
+
 	var result struct {
 		SecuredLink string `json:"securedLink"`
 		VideoSource string `json:"videoSource"`
@@ -630,11 +684,12 @@ func (c *SuperFlixClient) GetVideoAPI(ctx context.Context, playerBaseURL, videoH
 		return "", "", fmt.Errorf("failed to decode video API response: %w", err)
 	}
 
-	if result.SecuredLink != "" {
+	switch {
+	case result.SecuredLink != "":
 		streamURL = result.SecuredLink
-	} else if result.VideoSource != "" {
+	case result.VideoSource != "":
 		streamURL = result.VideoSource
-	} else {
+	default:
 		return "", "", fmt.Errorf("no stream URL in video API response")
 	}
 
@@ -658,7 +713,21 @@ func (c *SuperFlixClient) GetStreamURL(ctx context.Context, mediaType, mediaID, 
 		return nil, fmt.Errorf("failed to bootstrap: %w", err)
 	}
 	if len(servers) == 0 {
-		return nil, fmt.Errorf("no servers available")
+		// Empty bootstrap on a fully-loaded player page means SuperFlix has
+		// no provider for this specific content (typically placeholder
+		// episodes whose `air_date` is null in ALL_EPISODES). The upstream
+		// site renders a "not yet released" screen in the same case.
+		// Annotate the error with the player URL and contentid so triage
+		// doesn't confuse this with a network or scraping failure.
+		playerPath := fmt.Sprintf("/%s/%s", mediaType, mediaID)
+		if season != "" {
+			playerPath += "/" + season
+		}
+		if episode != "" {
+			playerPath += "/" + episode
+		}
+		return nil, fmt.Errorf("%w (url=%s%s, contentid=%s) — try another episode or source",
+			ErrSuperFlixNoServers, c.baseURL, playerPath, tokens.ContentID)
 	}
 
 	// Pick first non-fallback server
@@ -766,6 +835,33 @@ func (m *SuperFlixMedia) ToAnimeModel() *models.Anime {
 	util.Debug("SuperFlix ToAnimeModel", "title", m.Title, "tmdbID", m.TMDBID, "imageURL", anime.ImageURL)
 
 	return anime
+}
+
+// ensureJSONResponse fails fast when a SuperFlix API endpoint replies with an
+// HTML body or a non-2xx status. Without this, callers get the unhelpful
+// `invalid character '<' looking for beginning of value` JSON error — which
+// hides real causes like the host having moved (the .rest → .online 301 that
+// silently downgrades POST → GET) or a Cloudflare/captcha interstitial.
+//
+// Trust the body, not the Content-Type header. Some upstream players (e.g.
+// firevideoplayer.com behind llanfairpwllgwyngy.com) serve real JSON with
+// `Content-Type: text/html`, so a header-only check would reject valid
+// responses.
+func ensureJSONResponse(label string, resp *http.Response, body []byte) error {
+	trimmed := strings.TrimLeft(string(body), " \t\r\n\ufeff")
+	looksHTML := len(trimmed) > 0 && trimmed[0] == '<'
+
+	if looksHTML {
+		finalURL := ""
+		if resp.Request != nil && resp.Request.URL != nil {
+			finalURL = resp.Request.URL.String()
+		}
+		return fmt.Errorf("%s endpoint returned HTML (status %d, url=%q) — provider may have moved or is blocking the request", label, resp.StatusCode, finalURL)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("%s endpoint returned status %d", label, resp.StatusCode)
+	}
+	return nil
 }
 
 // Helper: split string by separator and trim each part

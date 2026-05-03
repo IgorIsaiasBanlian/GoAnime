@@ -77,14 +77,13 @@ func NewScraperManager() *ScraperManager {
 		// Initialize scrapers
 		manager.scrapers[AllAnimeType] = &AllAnimeAdapter{client: NewAllAnimeClient()}
 		manager.scrapers[AnimefireType] = &AnimefireAdapter{client: NewAnimefireClient()}
-		manager.scrapers[FlixHQType] = &FlixHQAdapter{client: NewFlixHQClient()}
-		manager.scrapers[SFlixType] = &SFlixAdapter{client: NewSFlixClient()}
-		manager.scrapers[NineAnimeType] = &NineAnimeAdapter{client: NewNineAnimeClient()}
+		// TEMP-DISABLED: FlixHQ, SFlix, and 9Anime adapters disabled until a fix lands.
+		// manager.scrapers[FlixHQType] = &FlixHQAdapter{client: NewFlixHQClient()}
+		// manager.scrapers[SFlixType] = &SFlixAdapter{client: NewSFlixClient()}
+		// manager.scrapers[NineAnimeType] = &NineAnimeAdapter{client: NewNineAnimeClient()}
 		manager.scrapers[GoyabuType] = &GoyabuAdapter{client: NewGoyabuClient()}
 		manager.scrapers[SuperFlixType] = &SuperFlixAdapter{client: NewSuperFlixClient()}
-
-		// AnimeDrive disabled — Cloudflare protection blocks all requests.
-		// Kept on standby until a bypass/solution is found.
+		// TEMP-DISABLED: AnimeDrive scraper temporarily disabled
 		// manager.scrapers[AnimeDriveType] = &AnimeDriveAdapter{client: NewAnimeDriveClient()}
 
 		globalScraperManager = manager
@@ -450,11 +449,11 @@ func (sm *ScraperManager) tagResults(results []*models.Anime, scraperType Scrape
 			lowerName := strings.ToLower(anime.Name)
 			if strings.Contains(lowerName, "dublado") || strings.Contains(lowerURL, "dublado") {
 				if !strings.Contains(anime.Name, "(Dublado)") {
-					anime.Name = anime.Name + " (Dublado)"
+					anime.Name += " (Dublado)"
 				}
 			} else if strings.Contains(lowerName, "legendado") || strings.Contains(lowerURL, "legendado") {
 				if !strings.Contains(anime.Name, "(Legendado)") {
-					anime.Name = anime.Name + " (Legendado)"
+					anime.Name += " (Legendado)"
 				}
 			}
 		}
