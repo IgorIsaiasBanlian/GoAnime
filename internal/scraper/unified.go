@@ -83,8 +83,8 @@ func NewScraperManager() *ScraperManager {
 		// manager.scrapers[NineAnimeType] = &NineAnimeAdapter{client: NewNineAnimeClient()}
 		manager.scrapers[GoyabuType] = &GoyabuAdapter{client: NewGoyabuClient()}
 		manager.scrapers[SuperFlixType] = &SuperFlixAdapter{client: NewSuperFlixClient()}
-
-		manager.scrapers[AnimeDriveType] = &AnimeDriveAdapter{client: NewAnimeDriveClient()}
+		// TEMP-DISABLED: AnimeDrive scraper temporarily disabled
+		// manager.scrapers[AnimeDriveType] = &AnimeDriveAdapter{client: NewAnimeDriveClient()}
 
 		globalScraperManager = manager
 	})
