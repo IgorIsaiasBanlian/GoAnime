@@ -1,0 +1,210 @@
+# GoAnime — Plano de Execução por Fases
+
+> **Meta:** 25.9% → 70% · **1 teste por função** · **~983 testes** (excluindo ~50 não-testáveis)
+> **Referência:** Funções alvo em `TEST_PLAN_FUNCTIONS.md` · Estratégia em `TEST_STRATEGY.md`
+
+---
+
+## FASE 1 ⬜ — Lógica Pura Simples (~50 funções)
+**Pacotes:** `models`, `version`, `pkg/goanime/types`, `api/source`, `api/aniskip`, `api/series`, `api/anime_url_title`
+
+| Pacote | Arquivo | Funções | Tipo |
+|---|---|---|---|
+| `internal/models/` | `media.go` | 13 (IsAnime, IsMovie, IsTV, IsMovieOrTV, GetDisplayName, OfficialTitle, GetRatingDisplay, GetGenresDisplay, GetRuntimeDisplay, etc.) | Puro |
+| `internal/models/` | `tmdb.go` | 4 (GetDisplayTitle, GetReleaseYear, GetPosterURL, GetBackdropURL) | Puro |
+| `internal/version/` | `version.go` | 2 (HasVersionArg, ShowVersion) | Puro |
+| `pkg/goanime/types/` | `anime.go`, `source.go` | 7 (FromInternalAnime, FromInternalAnimeList, FromInternalEpisode, FromInternalEpisodeList, String, ToScraperType, ParseSource) | Puro |
+| `internal/api/source/` | `definition.go`, `kind.go`, `resolve.go` | 7 (matchNonExplicit, ScraperTypeFor, ExtractAllAnimeID, Resolve, ResolveURL, BestEffortKind, IsAllAnimeShortID) | Puro/Mock |
+| `internal/api/` | `aniskip.go` | 4 (GetAniSkipData, RoundTime, ParseAniSkipResponse, GetAndParseAniSkipData) | Puro + httptest |
+| `internal/api/` | `series.go`, `anime_url_title.go` | 4 (IsSeries, IsSeriesEnhanced, toTitleCase, FetchAnimeFromAniListWithURL) | Puro/Mock |
+
+**Verificação:** `go test ./internal/models/ ./internal/version/ ./pkg/goanime/types/ ./internal/api/source/ -v -race`
+
+---
+
+## FASE 2 ⬜ — API Pura (~45 funções)
+**Pacotes:** `api/anime.go`, `api/episodes.go`, `api/enhanced.go` (funções puras), `api/allanime_smart.go`
+
+| Arquivo | Funções | Tipo |
+|---|---|---|
+| `api/anime.go` | ~20 (GetEpisodeData, GetMovieData, FetchAnimeDetails, SearchAnime, FetchAnimeData, getStringValue, getIntValue, getBoolValue, enrichAnimeData, searchAnimeOnPage, ParseAnimes, FetchAnimeFromAniList, httpGetWithUA, httpPostFast, resolveURL, normalizeAccents, CleanTitle, safeClose, selectAnimeWithGoFuzzyFinder) | Puro + httptest |
+| `api/episodes.go` | 4 (GetAnimeEpisodes, parseEpisodes, parseEpisodeNumber, sortEpisodesByNum) | Puro |
+| `api/enhanced.go` | 4 puras (sanitizeFilename, extractMediaIDFromURL, languagePriority, isStdoutTerminal) | Puro |
+| `api/allanime_smart.go` | 13 (sanitizeSmart, sanitizeSmartDest, validateSmartRangeInputs, shouldUseYtDlp, isUnsafeExtensionError, alreadyDownloaded, smartOutputDir, smartDownload, DownloadAllAnimeSmartRange, writeAniSkipSidecar, WriteAniSkipSidecar, smartDownloadDirect, resolveStreamURLForEpisode) | Puro/Mock |
+
+**Verificação:** `go test ./internal/api/ -run "TestAnime|TestEpisode|TestSanitize|TestExtractMedia|TestLanguage|TestSmart|TestValidate" -v -race`
+
+---
+
+## FASE 3 ⬜ — Segurança SSRF + Player Puro (~40 funções)
+**Pacotes:** `api/api.go`, `scraper/ssrf.go`, `api/movie/ssrf.go`, `player/` (funções puras)
+
+| Arquivo | Funções | Tipo |
+|---|---|---|
+| `api/api.go` | 7 (IsDisallowedIP, checkDisallowedIP, dialFunc, SafeTransport, SafeGet, ValidateExternalURL, SafeDialContext) | Puro + Mock |
+| `scraper/ssrf.go` | 3 (isDisallowedIP, safeDialFunc, safeScraperTransport) | Puro |
+| `api/movie/ssrf.go` | 3 (isDisallowedIP, safeDialFunc, safeMovieTransport) | Puro |
+| `player/player.go` | ~15 puras (filterMPVArgs, sanitizeMediaTarget, sanitizeOutputPath, buildMPVCommand, IsCurrentMediaMovie, SetAnimeName, SetMediaType, SetExactMediaType, GetExactMediaType, snapshotMedia, SetSeasonMap, SetMediaMeta, GetMediaMeta, PreWarmMPVPath, taskTotal, shouldGrowProgressTotal) | Puro |
+| `player/download.go` | ~8 puras (LooksLikeHLS, hasUnsafeExtension, isBloggerProxyURL, isAnimeFireVideoAPIURL, isUnsafeExtensionError, isRetryableError, extractRefererFromURL, fileExists) | Puro |
+| `player/scraper.go` | ~5 puras (extractResolution, abs, isPlayableVideoURL, needsVideoExtraction, isNumericString, isLikelyAllAnimeID, DownloadFolderFormatter) | Puro |
+
+**Verificação:** `go test ./internal/api/ -run "TestIsDisallowed|TestValidate|TestSafe" -v -race && go test ./internal/player/ -run "TestFilter|TestSanitize|TestBuild|TestLooks|TestHas|TestIs" -v -race`
+
+---
+
+## FASE 4 ⬜ — Scraper Infraestrutura (~45 funções)
+**Pacotes:** `scraper/source_diagnostic.go`, `scraper/source_circuit.go`, `scraper/source_health.go`, `scraper/errors.go`, `scraper/unified.go` (helpers puros)
+
+| Arquivo | Funções | Tipo |
+|---|---|---|
+| `source_diagnostic.go` | 14 (Is, UserMessage, Error, DiagnoseError, containsAny, NewHTTPStatusError, NewBlockedChallengeError, NewParserError, NewDecryptError, NewDownloadExpiredError, NewInternalBugError, isNetworkUnavailable, isBlockedStatus, statusFromMessage, etc.) | Puro |
+| `source_circuit.go` | 7 (newSourceCircuitBreaker, recordSuccess, recordFailure, ensureCircuitBreaker, circuitOpenDiagnostic, recordSourceSuccess, recordSourceFailure) | Estado |
+| `source_health.go` | 3 (CheckAllSourcesHealth, DefaultHealthCheckQuery, AvailableSources) | Mock |
+| `errors.go` | 2 (checkHTTPStatus, checkHTMLResponse) | Puro |
+| `unified.go` helpers | ~15 (sortPTBRFirst, cleanPTBRTitle, SearchAnimePTBR, getScraperDisplayName, getLanguageTag, NewScraperManager, PreWarmScraperManager, SearchAnime) | Puro/Mock |
+
+**Verificação:** `go test ./internal/scraper/ -run "TestDiagnose|TestCircuit|TestHealth|TestCheck|TestSortPTBR|TestCleanPTBR|TestGetScraperDisplay|TestGetLanguage" -v -race -count=3`
+
+---
+
+## FASE 5 ⬜ — Unified Adapters (~45 funções)
+**Pacotes:** `scraper/unified.go` (todos os adapters: AnimeFire, Goyabu, AllAnime, NineAnime, FlixHQ, SFlix, AnimeDrive, SuperFlix)
+
+Cada adapter tem ~4-5 métodos (SearchAnime, GetAnimeEpisodes, GetStreamURL, GetType, GetClient). Total ~40 métodos de adapters + NewSuperFlixAdapterWithClient.
+
+**Tipo:** Unit + MockScraper (reutilizar `MockScraper` de `unified_test.go`)
+
+**Verificação:** `go test ./internal/scraper/ -run "TestAdapter|TestSuperFlixAdapter" -v -race`
+
+---
+
+## FASE 6 ⬜ — Util Completo (~83 funções)
+**Pacotes:** `util/util.go`, `util/httpclient.go`, `util/perf.go`, `util/logger.go`, `util/help.go`, `util/ytdlp.go`
+
+| Arquivo | Funções | Tipo |
+|---|---|---|
+| `util.go` | ~25 (SetGlobalSubtitles, ClearGlobalSubtitles, SetGlobalReferer, GetGlobalReferer, ClearGlobalReferer, SetGlobalAnimeSource, GetGlobalAnimeSource, Is9AnimeSource, TreatingAnimeName, stripTrailingAnimeMetadata, BuildMediaFolderName, BuildMediaFileName, DefaultDownloadDir, DefaultMovieDownloadDir, FormatPlexMovieDir, FormatPlexEpisodePath, FormatPlexEpisodeDir, RegisterCleanup, RunCleanup, ErrorHandler, Helper, FlagParser) | Puro |
+| `httpclient.go` | ~22 (NewResponseCache, Get, Set, cleanupLoop, cleanup, GetAniListCache, GetSearchCache, NewWorkerPool, Submit, Wait, GetScraperPool, GetAPIPool, ParallelExecute, newSurfStdClient, GetSharedClient, GetFastClient, NewFastClient, GetDownloadClient, PreWarmClients) | Estado/Stress |
+| `perf.go` | ~16 (GetPerfTracker, StartTimer, Stop, StopAndLog, Record, IncrementCounter, GetCounter, GetMetrics, GetUptime, Reset, PrintReport, TimeFunc, TimeFuncWithResult, TimeFuncWithError, Perf, PerfCount) | Estado |
+| `logger.go` | ~16 (PrintSavedLocation, getColoredPrefix, GetLogDir, initFileLogger, InitLogger, showDebugBanner, CloseLogFile, GetLogFileWriter, Debug, Info, Warn, Error, Fatal, Infof, Warnf, Errorf) | Puro |
+| `help.go` | 4 (ShowBeautifulHelp, addOption, addFeature, addExample) | Puro |
+| `ytdlp.go` | 1 (YtdlpCanImpersonate) | Puro |
+
+**Verificação:** `go test ./internal/util/ -v -race -count=3`
+
+---
+
+## FASE 7 ⬜ — FlixHQ Scraper (~54 funções)
+**Arquivo:** `internal/scraper/flixhq.go`
+
+**Pré-requisito:** Criar fixtures HTML em `internal/scraper/testdata/flixhq/`
+
+Todas as 54 funções com `httptest.Server` + HTML fixtures. Incluindo: NewFlixHQClient, SearchMedia, GetTrending, GetRecentMovies, GetRecentTV, GetInfo, GetServers, GetSources, ExtractStreamInfo, GetStreamURL, GetAvailableQualities, GetMovieQualities, SelectQualityInteractive, QualityToLabel, LabelToQuality, filterSubtitlesByLanguage, extractSearchResults, parseMovieServers, parseTVServers, decorateRequest, ToMedia, ToEpisodeModel, ToStreamInfo, etc.
+
+**Verificação:** `go test ./internal/scraper/ -run "TestFlixHQ" -v -race`
+
+---
+
+## FASE 8 ⬜ — SFlix Scraper (~46 funções)
+**Arquivo:** `internal/scraper/sflix.go`
+
+**Pré-requisito:** Criar fixtures HTML em `internal/scraper/testdata/sflix/`
+
+Mesmo padrão FlixHQ. Todas as 46 funções: NewSFlixClient, SearchMedia, GetSeasons, GetEpisodes, GetInfo, GetServers, GetSources, ExtractStreamInfo, GetStreamURL, GetAvailableQualities, SelectBestQuality, sortServersByPriority, detectMediaType, QualityToLabel, ToMedia, ToEpisodeModel, ToStreamInfo, etc.
+
+**Verificação:** `go test ./internal/scraper/ -run "TestSFlix" -v -race`
+
+---
+
+## FASE 9 ⬜ — NineAnime + AnimeFire + Goyabu + AllAnime (~50 funções)
+**Arquivos:** `nineanime.go`(21), `animefire.go`(8), `goyabu.go`(7), `allanime.go`(14)
+
+Todos com `httptest.Server`. Cada scraper tem SearchAnime, GetEpisodes, GetStreamURL + helpers internos.
+
+**Verificação:** `go test ./internal/scraper/ -run "TestNineAnime|TestAnimeFire|TestGoyabu|TestAllAnime" -v -race`
+
+---
+
+## FASE 10 ⬜ — AnimeDrive + SuperFlix + MediaManager (~90 funções)
+**Arquivos:** `animedrive.go`(21), `superflix.go`(9), `media_manager.go`(60)
+
+MediaManager tem muitos delegates simples (GetFlixHQTrendingMovies, GetSFlixTrendingMovies, etc.) — rápidos de testar com mock.
+
+**Verificação:** `go test ./internal/scraper/ -run "TestAnimeDrive|TestSuperFlix|TestMediaManager" -v -race`
+
+---
+
+## FASE 11 ⬜ — Player Completo (~128 funções)
+**Arquivos:** `player.go`(40), `playvideo.go`(~35), `download.go`(~28), `scraper.go`(~25)
+
+Funções com MPV (StartVideo, mpvSendCommand) → mock com `net.Pipe()` para IPC socket.
+Funções puras (filter, sanitize, extract) → unitário direto.
+Funções TUI (askForDownload) → skip ou testar lógica interna.
+
+**Verificação:** `go test ./internal/player/ -v -race`
+
+---
+
+## FASE 12 ⬜ — Downloader Completo (~84 funções)
+**Arquivos:** `downloader.go`(33), `movie_downloader.go`(28), `nineanime_downloader.go`(16), `hls/hls.go`(7)
+
+Todos com `httptest.Server` mockando CDN. Funções TUI (promptPlay*) → testar lógica, não UI.
+
+**Verificação:** `go test ./internal/downloader/... -v -race`
+
+---
+
+## FASE 13 ⬜ — API Movie + Enhanced HTTP + Providers (~100 funções)
+**Arquivos:** `api/movie/`(27), `api/enhanced.go` HTTP(~16), `api/episode_providers.go`(7), `api/allanime_enhanced.go`(4), `api/providers/`(46+5+7+9)
+
+| Sub-pacote | Funções |
+|---|---|
+| `api/movie/omdb.go` | 10 (NewOMDbClient, IsConfigured, SearchByTitle, GetByIMDBID, GetByTitle, makeRequest, GetRuntimeMinutes, GetRating, GetGenres) |
+| `api/movie/tmdb.go` | 14 (NewTMDBClient, IsConfigured, SearchMulti, SearchMovies, SearchTV, GetTVSeasons, GetSeasonEpisodes, GetCredits, FindByIMDBID, GetTrending, GetPopular, GetImageURL) |
+| `api/movie/enrich.go` | 3 (EnrichMedia, EnrichWithOMDb, FormatMediaInfo) |
+| `api/providers/registry.go` | 5 (RegisterProvider, ForKind, ForAnime, HasProvider, ResetForTesting) |
+| `api/providers/source_providers.go` | 46 (8 providers × ~6 methods each) |
+| `api/providers/metadata/` | 7 |
+| `api/providers/naming/` | 9 |
+
+**Verificação:** `go test ./internal/api/movie/ ./internal/api/providers/... ./internal/api/ -run "TestEnhanced|TestEpisodeProv|TestAllAnimeEnhanced" -v -race`
+
+---
+
+## FASE 14 ⬜ — Handlers + Playback + Resto (~120 funções)
+**Arquivos:** `handlers/`(28), `playback/`(23), `download/workflow.go`(10), `discord/`(34), `tracking/`(7), `updater/`(12), `tui/`(7), `upscaler/`(47), `appflow/`(2), `pkg/goanime/client.go`(7), `scraper/movie/`(42)
+
+| Sub-pacote | Funções | Nota |
+|---|---|---|
+| `handlers/` | 28 | Muitas dependem de TUI → testar routing logic |
+| `playback/` | 23 | MPV boundary → mock IPC |
+| `download/` | 10 | Workflow → mock API |
+| `discord/` | 34 | RPC daemon → mock interface |
+| `tracking/` | 7 | SQLite → t.TempDir() |
+| `updater/` | 12 | HTTP → httptest |
+| `upscaler/` | 47 | FFmpeg → skip GPU, testar config/options |
+| `scraper/movie/` | 42 | Delegates → mock |
+
+**Verificação:** `go test ./internal/handlers/ ./internal/playback/ ./internal/download/ ./internal/discord/ ./internal/tracking/ ./internal/updater/ ./internal/upscaler/ ./internal/scraper/movie/ ./internal/appflow/ ./pkg/goanime/ -v -race`
+
+---
+
+## Checklist
+
+| Fase | Escopo | Funções | Status |
+|---|---|---|---|
+| 1 | Models + Types + Source + AniSkip | ~50 | ⬜ |
+| 2 | API Pure (anime, episodes, enhanced, smart) | ~45 | ⬜ |
+| 3 | SSRF + Player Pure | ~40 | ⬜ |
+| 4 | Scraper Infrastructure | ~45 | ⬜ |
+| 5 | Unified Adapters | ~45 | ⬜ |
+| 6 | Util Completo | ~83 | ⬜ |
+| 7 | FlixHQ | ~54 | ⬜ |
+| 8 | SFlix | ~46 | ⬜ |
+| 9 | NineAnime + AnimeFire + Goyabu + AllAnime | ~50 | ⬜ |
+| 10 | AnimeDrive + SuperFlix + MediaManager | ~90 | ⬜ |
+| 11 | Player Completo | ~128 | ⬜ |
+| 12 | Downloader Completo | ~84 | ⬜ |
+| 13 | API Movie + Enhanced + Providers | ~100 | ⬜ |
+| 14 | Handlers + Playback + Discord + Upscaler + Resto | ~120 | ⬜ |
+| **TOTAL** | | **~983** | |
