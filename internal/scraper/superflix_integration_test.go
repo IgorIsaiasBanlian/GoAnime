@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -694,6 +695,12 @@ func TestIntegration_SuperFlix_ThroughScraperManager(t *testing.T) {
 // =============================================================================
 
 func TestIntegration_RealSuperFlix_SearchAndVerify(t *testing.T) {
+	if v := strings.ToLower(os.Getenv("GITHUB_ACTIONS")); v == "true" || v == "1" {
+		t.Skip("skipped in CI: real upstream call")
+	}
+	if v := strings.ToLower(os.Getenv("CI")); v == "true" || v == "1" {
+		t.Skip("skipped in CI: real upstream call")
+	}
 	if testing.Short() {
 		t.Skip("Skipping integration test that hits real SuperFlix API")
 	}
@@ -748,6 +755,12 @@ func TestIntegration_RealSuperFlix_SearchAndVerify(t *testing.T) {
 }
 
 func TestIntegration_RealSuperFlix_GetEpisodes(t *testing.T) {
+	if v := strings.ToLower(os.Getenv("GITHUB_ACTIONS")); v == "true" || v == "1" {
+		t.Skip("skipped in CI: real upstream call")
+	}
+	if v := strings.ToLower(os.Getenv("CI")); v == "true" || v == "1" {
+		t.Skip("skipped in CI: real upstream call")
+	}
 	if testing.Short() {
 		t.Skip("Skipping integration test that hits real SuperFlix API")
 	}
@@ -780,6 +793,12 @@ func TestIntegration_RealSuperFlix_GetEpisodes(t *testing.T) {
 }
 
 func TestIntegration_RealSuperFlix_GetEpisodes_NarutoPlaceholderFilter(t *testing.T) {
+	if v := strings.ToLower(os.Getenv("GITHUB_ACTIONS")); v == "true" || v == "1" {
+		t.Skip("skipped in CI: real upstream call")
+	}
+	if v := strings.ToLower(os.Getenv("CI")); v == "true" || v == "1" {
+		t.Skip("skipped in CI: real upstream call")
+	}
 	if testing.Short() {
 		t.Skip("Skipping integration test that hits real SuperFlix API")
 	}

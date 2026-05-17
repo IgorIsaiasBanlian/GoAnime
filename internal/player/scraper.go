@@ -362,33 +362,7 @@ func GetVideoURLForEpisodeEnhanced(episode *models.Episode, anime *models.Anime)
 		return "", fmt.Errorf("cannot resolve stream without anime context for episode %s; missing anime identifier", episode.Number)
 	}
 
-	// Try AnimeDrive enhanced navigation if applicable
-	if isAnimeDriveSourcePlayer(anime) {
-		streamURL, err := api.GetEpisodeStreamURL(episode, anime, util.GlobalQuality)
-		if err == nil {
-			// Validate the URL is a playable video, not an iframe/embed page
-			if isPlayableVideoURL(streamURL) {
-				return streamURL, nil
-			}
-			// Try to extract actual video from intermediate URL
-			if needsVideoExtraction(streamURL) {
-				resolved, resolveErr := extractActualVideoURL(streamURL)
-				if resolveErr == nil && resolved != "" {
-					return resolved, nil
-				}
-			}
-			util.Debug("AnimeDrive returned non-playable URL", "url", streamURL)
-			return "", fmt.Errorf("AnimeDrive returned non-playable URL: %s", streamURL)
-		}
-		// Check if user requested to go back from server selection
-		if errors.Is(err, scraper.ErrBackRequested) {
-			return "", ErrBackToEpisodeSelection
-		}
-		// For AnimeDrive, return the error instead of trying legacy method
-		return "", fmt.Errorf("failed to get AnimeDrive stream URL: %w", err)
-	}
-
-	// Movie/TV routing: SuperFlix and FlixHQ both flow through the enhanced API,
+// Movie/TV routing: SuperFlix and FlixHQ both flow through the enhanced API,
 	// which dispatches by anime.Source internally. Label logs by the actual
 	// source so triage isn't misled into thinking SuperFlix failures came from
 	// FlixHQ.

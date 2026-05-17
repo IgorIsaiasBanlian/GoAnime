@@ -69,9 +69,6 @@ func TestScraperManager_GetScraperDisplayName(t *testing.T) {
 	}{
 		{AllAnimeType, "AllAnime"},
 		{AnimefireType, "Animefire.io"},
-		{AnimeDriveType, "AnimeDrive"},
-		{SFlixType, "SFlix"},
-		{NineAnimeType, "9Anime"},
 		{GoyabuType, "Goyabu"},
 		{SuperFlixType, "SuperFlix"},
 		{ScraperType(999), "Desconhecido"},
@@ -90,9 +87,6 @@ func TestScraperManager_GetLanguageTag(t *testing.T) {
 	}{
 		{AllAnimeType, "[English]"},
 		{AnimefireType, "[PT-BR]"},
-		{AnimeDriveType, "[PT-BR]"},
-		{SFlixType, "[English]"},
-		{NineAnimeType, "[Multilanguage]"},
 		{GoyabuType, "[PT-BR]"},
 		{SuperFlixType, "[PT-BR]"},
 		{ScraperType(999), "[Unknown]"},

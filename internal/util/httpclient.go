@@ -297,10 +297,6 @@ var knownHosts = []string{
 	"api.jikan.moe:443",
 	"allanime.day:443",
 	"animefire.io:443",
-	"animesdrive.online:443",
-	"flixhq.to:443",
-	"sflix.to:443",
-	"9animetv.to:443",
 	"kitsu.io:443",
 }
 

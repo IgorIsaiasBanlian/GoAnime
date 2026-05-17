@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"charm.land/bubbles/v2/progress"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
+	"golang.org/x/term"
 	"github.com/alvarorichard/Goanime/internal/api"
 	"github.com/alvarorichard/Goanime/internal/downloader/hls"
 	"github.com/alvarorichard/Goanime/internal/models"
@@ -1971,6 +1973,13 @@ func HandleBatchDownloadRange(episodes []models.Episode, anime *models.Anime, st
 
 // getEpisodeRange asks the user for the episode range for download.
 func getEpisodeRange() (startNum, endNum int, err error) {
+	// Bail out fast when stdin is not a TTY (CI, piped input, headless tests).
+	// Otherwise Bubble Tea's input reader blocks on syscall.ReadConsole on
+	// Windows or just hangs on a closed stdin elsewhere.
+	if fd := os.Stdin.Fd(); fd <= uintptr(math.MaxInt) && !term.IsTerminal(int(fd)) {
+		return 0, 0, fmt.Errorf("invalid episode range: stdin is not a terminal")
+	}
+
 	var startStr, endStr string
 
 	form := huh.NewForm(

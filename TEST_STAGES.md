@@ -68,7 +68,7 @@
 ---
 
 ## FASE 5 ✅ — Unified Adapters (~45 funções)
-**Pacotes:** `scraper/unified.go` (todos os adapters: AnimeFire, Goyabu, AllAnime, NineAnime, SFlix, AnimeDrive, SuperFlix)
+**Pacotes:** `scraper/unified.go` (adapters ativos: AnimeFire, Goyabu, AllAnime, SuperFlix)
 
 Cada adapter tem ~4-5 métodos (SearchAnime, GetAnimeEpisodes, GetStreamURL, GetType, GetClient). Total ~40 métodos de adapters + NewSuperFlixAdapterWithClient.
 
@@ -95,36 +95,30 @@ Cada adapter tem ~4-5 métodos (SearchAnime, GetAnimeEpisodes, GetStreamURL, Get
 ---
 
 ## FASE 7 ❌ — REMOVIDA (FlixHQ deletado)
-> FlixHQ scraper foi removido em 2026-05-17 — site caiu. Funções/arquivos deletados: `internal/scraper/flixhq.go`, `flixhq_test.go`, `flixhq_quality_test.go`, `internal/scraper/movie/flixhq.go`, `internal/api/flixhq_flow_test.go`. MediaManager/handlers/downloader/playback agora SFlix-only.
+> FlixHQ scraper foi removido em 2026-05-17 — site caiu.
 
 ---
 
-## FASE 8 ✅ — SFlix Scraper (~46 funções)
-**Arquivo:** `internal/scraper/sflix.go`
-
-**Pré-requisito:** Criar fixtures HTML em `internal/scraper/testdata/sflix/`
-
-Padrão httptest.Server + HTML fixtures. Todas as 46 funções: NewSFlixClient, SearchMedia, GetSeasons, GetEpisodes, GetInfo, GetServers, GetSources, ExtractStreamInfo, GetStreamURL, GetAvailableQualities, SelectBestQuality, sortServersByPriority, detectMediaType, QualityToLabel, ToMedia, ToEpisodeModel, ToStreamInfo, etc.
-
-**Verificação:** `go test ./internal/scraper/ -run "TestSFlix" -v -race`
+## FASE 8 ❌ — REMOVIDA (SFlix deletado)
+> SFlix scraper foi removido em 2026-05-17 — mesma queda que FlixHQ. Arquivos deletados: `internal/scraper/sflix.go`, `sflix_test.go`, `internal/scraper/movie/sflix.go`.
 
 ---
 
-## FASE 9 ✅ — NineAnime + AnimeFire + Goyabu + AllAnime (~50 funções)
-**Arquivos:** `nineanime.go`(21), `animefire.go`(8), `goyabu.go`(7), `allanime.go`(14)
+## FASE 9 ✅ — AnimeFire + Goyabu + AllAnime (~29 funções)
+**Arquivos:** `animefire.go`(8), `goyabu.go`(7), `allanime.go`(14)
 
-Todos com `httptest.Server`. Cada scraper tem SearchAnime, GetEpisodes, GetStreamURL + helpers internos.
+NineAnime (9animetv.to) removido em 2026-05-17 — site caiu. Restantes scrapers cobertos com `httptest.Server`. Cada um tem SearchAnime, GetEpisodes, GetStreamURL + helpers internos.
 
-**Verificação:** `go test ./internal/scraper/ -run "TestNineAnime|TestAnimeFire|TestGoyabu|TestAllAnime" -v -race`
+**Verificação:** `go test ./internal/scraper/ -run "TestAnimeFire|TestGoyabu|TestAllAnime" -v -race`
 
 ---
 
-## FASE 10 ✅ — AnimeDrive + SuperFlix + MediaManager (~90 funções)
-**Arquivos:** `animedrive.go`(21), `superflix.go`(9), `media_manager.go`(60)
+## FASE 10 ✅ — SuperFlix + MediaManager (~69 funções)
+**Arquivos:** `superflix.go`(9), `media_manager.go`(60)
 
-MediaManager tem delegates simples (GetSFlixTrendingMovies, etc.) — rápidos de testar com mock.
+AnimeDrive removido em 2026-05-17. MediaManager agora anime-only.
 
-**Verificação:** `go test ./internal/scraper/ -run "TestAnimeDrive|TestSuperFlix|TestMediaManager" -v -race`
+**Verificação:** `go test ./internal/scraper/ -run "TestSuperFlix|TestMediaManager" -v -race`
 
 ---
 
@@ -177,8 +171,8 @@ Distribuição por arquivo:
 |---|---|
 | `hls/hls_test.go` (append) | `NewDownloader`, `Download` (wrapper), `parseMediaPlaylist`×2 (direct + non-HLS), `DownloadToFile` (default-client) |
 | `downloader_test.go` (novo) | `NewEpisodeDownloader`, `NewEpisodeDownloaderWithAnime`, `DownloadSingleEpisode`, `DownloadEpisodeRange`×2, `DownloadAllEpisodes`×2, `downloadConcurrentWithProgress`, `downloadMultipleWithProgress` (pin), `downloadEpisodeWithSharedProgress`×2, `findEpisodeByNumber`, `printDownloadLocation`, `fileExists`, `sanitizeDestPath`×3, `episodeFilename`×3, `resolveEpisodeSeason`×2, `episodeDir`×3, `getBestQualityURL` (SSRF), `getContentLength`×3, `estimateContentLengthForAllAnime`×2, `downloadWithProgress`/`downloadHTTPWithProgress`/`downloadM3U8WithYtDlp`/`downloadWithYtDlp` (pin), `downloadEpisodeWithProgress` (empty URL), `isUnsafeExtError`×4, `promptPlayExisting`/`promptPlayDownloaded` (closed stdin), `promptPlayDownloadedRangeHuh`/`promptPlayExistingRangeHuh` (empty list), `playEpisode` (pin), `tickCmd`, `progressModel.Init`/`Update`×3/`View` |
-| `movie_downloader_test.go` (novo) | `NewMovieDownloader`, `NewMovieDownloaderWithConfig`×2, `DownloadMovie`×2, `DownloadTVEpisode`, `DownloadTVEpisodeRange`, `DownloadAllSeasons`×2, `getSFlixMovieStream`/`getSFlixEpisodeStream` (pin), `downloadMovieWithProgress`/`downloadHTTPWithProgress`/`downloadM3U8WithYtDlp`/`downloadM3U8WithYtDlpDirect`/`downloadM3U8WithNativeHLS` (pin), `extractRefererFromStreamURL`×4, `getContentLength`×2, `fileExists`, `sanitizeDestPath`×3, `promptPlayExisting`/`promptPlayDownloaded` (closed stdin), `playMovie` (pin), `extractMediaIDFromURL`×4, `movieTickCmd`, `movieProgressModel.Init`/`Update`×3/`View` |
-| `nineanime_downloader_test.go` (novo) | `NewNineAnimeDownloader`×2, `DownloadAllEpisodes`/`DownloadSingleEpisode`/`DownloadEpisodeRange` (nil + inverted), `buildOutputDir`×2, `episodeFilename`×2, `resolveStream` (pin), `promptSubtitleLanguage`×5, `downloadSubtitles` (no-tracks), `downloadFile`×3, `downloadEpisodeWithProgress` (skip-existing), `downloadBatchWithProgress` (all-existing), `downloadStream`/`downloadNativeHLS`/`downloadWithYtDlp` (pin), `isRetryableDownloadError`×7 |
+| ~~movie_downloader_test.go~~ | DELETADO — `internal/downloader/movie_downloader.go` removido junto com SFlix/FlixHQ em 2026-05-17 |
+| ~~nineanime_downloader_test.go~~ | DELETADO — `internal/downloader/nineanime_downloader.go` removido em 2026-05-17 |
 
 **Notas de teste:**
 - Funções network-bound (downloadHTTPWithProgress, downloadM3U8WithYtDlp*, downloadStream, downloadNativeHLS, etc.) testadas via path SSRF: `api.SafeTransport` rejeita loopback → erro determinístico. Funções yt-dlp wrapped + funções que driveriam Bubble Tea `p.Run()` ficam como pin de símbolo (cobertura 0% nessas, mas teste dedicado existe). Justificativa: yt-dlp lança binário externo; tea.Program.Run requer TTY.
@@ -233,10 +227,10 @@ Distribuição por arquivo:
 | 4 | Scraper Infrastructure | ~45 | ✅ |
 | 5 | Unified Adapters | ~45 | ✅ |
 | 6 | Util Completo | ~83 | ✅ |
-| 7 | FlixHQ | — | ❌ (removido) |
-| 8 | SFlix | ~46 | ✅ |
-| 9 | NineAnime + AnimeFire + Goyabu + AllAnime | ~50 | ✅ |
-| 10 | AnimeDrive + SuperFlix + MediaManager | ~90 | ✅ |
+| 7 | FlixHQ | — | ❌ (removido 2026-05-17) |
+| 8 | SFlix | — | ❌ (removido 2026-05-17) |
+| 9 | AnimeFire + Goyabu + AllAnime | ~29 | ✅ (NineAnime removido 2026-05-17) |
+| 10 | SuperFlix + MediaManager | ~69 | ✅ (AnimeDrive removido 2026-05-17) |
 | 11 | Player Completo | ~128 | ✅ |
 | 12 | Downloader Completo | ~84 | ✅ |
 | 13 | API Movie + Enhanced + Providers | ~100 | ⬜ |

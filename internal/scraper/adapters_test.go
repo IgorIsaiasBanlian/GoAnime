@@ -20,24 +20,6 @@ func TestAnimefireAdapter_GetType(t *testing.T) {
 	assert.Equal(t, AnimefireType, a.GetType())
 }
 
-func TestAnimeDriveAdapter_GetType(t *testing.T) {
-	t.Parallel()
-	a := &AnimeDriveAdapter{}
-	assert.Equal(t, AnimeDriveType, a.GetType())
-}
-
-func TestSFlixAdapter_GetType(t *testing.T) {
-	t.Parallel()
-	a := &SFlixAdapter{}
-	assert.Equal(t, SFlixType, a.GetType())
-}
-
-func TestNineAnimeAdapter_GetType(t *testing.T) {
-	t.Parallel()
-	a := &NineAnimeAdapter{}
-	assert.Equal(t, NineAnimeType, a.GetType())
-}
-
 func TestGoyabuAdapter_GetType(t *testing.T) {
 	t.Parallel()
 	a := &GoyabuAdapter{}
@@ -50,20 +32,6 @@ func TestAllAnimeAdapter_Client(t *testing.T) {
 	client := NewAllAnimeClient()
 	a := &AllAnimeAdapter{client: client}
 	assert.Same(t, client, a.Client())
-}
-
-func TestSFlixAdapter_GetClient(t *testing.T) {
-	t.Parallel()
-	client := NewSFlixClient()
-	a := &SFlixAdapter{client: client}
-	assert.Same(t, client, a.GetClient())
-}
-
-func TestNineAnimeAdapter_GetClient(t *testing.T) {
-	t.Parallel()
-	client := NewNineAnimeClient()
-	a := &NineAnimeAdapter{client: client}
-	assert.Same(t, client, a.GetClient())
 }
 
 func TestNewSuperFlixAdapterWithClient(t *testing.T) {

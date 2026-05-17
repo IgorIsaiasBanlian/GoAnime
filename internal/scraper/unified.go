@@ -30,9 +30,6 @@ const (
 const (
 	AllAnimeType ScraperType = iota
 	AnimefireType
-	AnimeDriveType
-	SFlixType     // Movies and TV Shows source
-	NineAnimeType // 9animetv.to anime source
 	GoyabuType    // PT-BR anime source
 	SuperFlixType // SuperFlix PT-BR movies/series/animes/doramas
 )
@@ -76,14 +73,8 @@ func NewScraperManager() *ScraperManager {
 		// Initialize scrapers
 		manager.scrapers[AllAnimeType] = &AllAnimeAdapter{client: NewAllAnimeClient()}
 		manager.scrapers[AnimefireType] = &AnimefireAdapter{client: NewAnimefireClient()}
-		// TEMP-DISABLED: FlixHQ, SFlix, and 9Anime adapters disabled until a fix lands.
-		// manager.scrapers[FlixHQType] = &FlixHQAdapter{client: NewFlixHQClient()}
-		// manager.scrapers[SFlixType] = &SFlixAdapter{client: NewSFlixClient()}
-		// manager.scrapers[NineAnimeType] = &NineAnimeAdapter{client: NewNineAnimeClient()}
 		manager.scrapers[GoyabuType] = &GoyabuAdapter{client: NewGoyabuClient()}
 		manager.scrapers[SuperFlixType] = &SuperFlixAdapter{client: NewSuperFlixClient()}
-		// TEMP-DISABLED: AnimeDrive scraper temporarily disabled
-		// manager.scrapers[AnimeDriveType] = &AnimeDriveAdapter{client: NewAnimeDriveClient()}
 
 		globalScraperManager = manager
 	})
@@ -383,15 +374,7 @@ func needsMediaTypeDisambig(results []*models.Anime) map[string]bool {
 // tagResults adds language tags and source metadata to results
 func (sm *ScraperManager) tagResults(results []*models.Anime, scraperType ScraperType) {
 	sourceName := sm.getScraperDisplayName(scraperType)
-	isPTBR := scraperType == AnimefireType || scraperType == AnimeDriveType || scraperType == GoyabuType
-
-	// For SFlix, pre-scan to find titles that need a [Movie]/[TV]
-	// disambiguation tag (same title appears as both movie and TV show).
-	// SuperFlix always shows media type since it mixes movies/series/animes/doramas.
-	var disambig map[string]bool
-	if scraperType == SFlixType {
-		disambig = needsMediaTypeDisambig(results)
-	}
+	isPTBR := scraperType == AnimefireType || scraperType == GoyabuType
 
 	for _, anime := range results {
 		// Clean PT-BR titles before tagging
@@ -420,21 +403,6 @@ func (sm *ScraperManager) tagResults(results []*models.Anime, scraperType Scrape
 					anime.Name = fmt.Sprintf("[TV] [PT-BR] %s", anime.Name)
 				default:
 					anime.Name = fmt.Sprintf("[PT-BR] %s", anime.Name)
-				}
-			case SFlixType:
-				// SFlix: add [Movie]/[TV] only when disambiguation is needed.
-				key := strings.ToLower(strings.TrimSpace(anime.Name))
-				if disambig[key] {
-					switch anime.MediaType {
-					case models.MediaTypeMovie:
-						anime.Name = fmt.Sprintf("[Movie] %s", anime.Name)
-					case models.MediaTypeTV:
-						anime.Name = fmt.Sprintf("[TV] %s", anime.Name)
-					default:
-						anime.Name = fmt.Sprintf("[English] %s", anime.Name)
-					}
-				} else {
-					anime.Name = fmt.Sprintf("[English] %s", anime.Name)
 				}
 			default:
 				languageTag := sm.getLanguageTag(scraperType)
@@ -529,14 +497,10 @@ func (sm *ScraperManager) GetScraper(scraperType ScraperType) (UnifiedScraper, e
 // instead of the generic "search timed out". Returns "" for sources that have
 // no probable HTML root (GraphQL endpoints, opaque APIs, etc.).
 func (sm *ScraperManager) getScraperBaseURL(scraperType ScraperType) string {
-	switch scraperType {
-	case SFlixType:
-		return SFlixBase
-	case NineAnimeType:
-		return NineAnimeBase
-	default:
-		return ""
-	}
+	// Currently no source has a usable homepage probe target. Keep the hook
+	// in case future scrapers want post-timeout origin probing.
+	_ = scraperType
+	return ""
 }
 
 // originProbeBudget bounds how long the post-timeout origin probe is allowed
@@ -551,12 +515,6 @@ func (sm *ScraperManager) getScraperDisplayName(scraperType ScraperType) string 
 		return "AllAnime"
 	case AnimefireType:
 		return "Animefire.io"
-	case AnimeDriveType:
-		return "AnimeDrive"
-	case SFlixType:
-		return "SFlix"
-	case NineAnimeType:
-		return "9Anime"
 	case GoyabuType:
 		return "Goyabu"
 	case SuperFlixType:
@@ -573,12 +531,6 @@ func (sm *ScraperManager) getLanguageTag(scraperType ScraperType) string {
 		return "[English]"
 	case AnimefireType:
 		return "[PT-BR]"
-	case AnimeDriveType:
-		return "[PT-BR]"
-	case SFlixType:
-		return "[English]"
-	case NineAnimeType:
-		return "[Multilanguage]"
 	case GoyabuType:
 		return "[PT-BR]"
 	case SuperFlixType:
@@ -680,159 +632,6 @@ func (a *AnimefireAdapter) GetStreamURL(episodeURL string, options ...any) (stri
 
 func (a *AnimefireAdapter) GetType() ScraperType {
 	return AnimefireType
-}
-
-// AnimeDriveAdapter adapts AnimeDriveClient to UnifiedScraper interface
-type AnimeDriveAdapter struct {
-	client *AnimeDriveClient
-}
-
-func (a *AnimeDriveAdapter) SearchAnime(query string, options ...any) ([]*models.Anime, error) {
-	return a.client.SearchAnime(query)
-}
-
-func (a *AnimeDriveAdapter) GetAnimeEpisodes(animeURL string) ([]models.Episode, error) {
-	return a.client.GetAnimeEpisodes(animeURL)
-}
-
-func (a *AnimeDriveAdapter) GetStreamURL(episodeURL string, options ...any) (string, map[string]string, error) {
-	// Check if server selection is requested via options
-	selectServer := true // Default to showing server selection
-	for _, opt := range options {
-		if s, ok := opt.(string); ok && s == "auto" {
-			selectServer = false
-			break
-		}
-		if b, ok := opt.(bool); ok {
-			selectServer = b
-		}
-	}
-
-	if selectServer {
-		return a.client.GetStreamURLWithSelection(episodeURL)
-	}
-	return a.client.GetStreamURL(episodeURL)
-}
-
-func (a *AnimeDriveAdapter) GetType() ScraperType {
-	return AnimeDriveType
-}
-
-// SFlixAdapter adapts SFlixClient to UnifiedScraper interface for movies and TV shows
-type SFlixAdapter struct {
-	client *SFlixClient
-}
-
-func (a *SFlixAdapter) SearchAnime(query string, options ...any) ([]*models.Anime, error) {
-	media, err := a.client.SearchMedia(query)
-	if err != nil {
-		return nil, err
-	}
-
-	var animes []*models.Anime
-	for _, m := range media {
-		anime := m.ToAnimeModel()
-		// Set the media type
-		if m.Type == MediaTypeMovie {
-			anime.MediaType = models.MediaTypeMovie
-		} else {
-			anime.MediaType = models.MediaTypeTV
-		}
-		anime.Year = m.Year
-		animes = append(animes, anime)
-	}
-
-	return animes, nil
-}
-
-func (a *SFlixAdapter) GetAnimeEpisodes(animeURL string) ([]models.Episode, error) {
-	// For SFlix, animeURL contains the media ID
-	// This needs to be called differently for movies vs TV shows
-	return nil, fmt.Errorf("for SFlix, use GetSeasons and GetEpisodes directly on the client")
-}
-
-func (a *SFlixAdapter) GetStreamURL(episodeURL string, options ...any) (string, map[string]string, error) {
-	// Parse options
-	provider := "Vidcloud"
-	quality := "1080"
-	subsLanguage := "english"
-
-	for i, opt := range options {
-		if s, ok := opt.(string); ok {
-			switch i {
-			case 0:
-				provider = s
-			case 1:
-				quality = s
-			case 2:
-				subsLanguage = s
-			}
-		}
-	}
-
-	// Get embed link directly from episode ID
-	embedLink, err := a.client.GetEmbedLink(episodeURL)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to get embed link: %w", err)
-	}
-
-	streamInfo, err := a.client.ExtractStreamInfo(embedLink, quality, subsLanguage)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to extract stream info: %w", err)
-	}
-
-	metadata := make(map[string]string)
-	metadata["source"] = "sflix"
-	metadata["provider"] = provider
-	metadata["quality"] = quality
-
-	// Include subtitle URLs in metadata
-	if len(streamInfo.Subtitles) > 0 {
-		var subURLs []string
-		for _, sub := range streamInfo.Subtitles {
-			subURLs = append(subURLs, sub.URL)
-		}
-		metadata["subtitles"] = strings.Join(subURLs, ",")
-	}
-
-	return streamInfo.VideoURL, metadata, nil
-}
-
-func (a *SFlixAdapter) GetType() ScraperType {
-	return SFlixType
-}
-
-// GetClient returns the underlying SFlix client for direct access
-func (a *SFlixAdapter) GetClient() *SFlixClient {
-	return a.client
-}
-
-// NineAnimeAdapter adapts NineAnimeClient to UnifiedScraper interface
-type NineAnimeAdapter struct {
-	client *NineAnimeClient
-}
-
-func (a *NineAnimeAdapter) SearchAnime(query string, options ...any) ([]*models.Anime, error) {
-	return a.client.SearchAnime(query)
-}
-
-func (a *NineAnimeAdapter) GetAnimeEpisodes(animeURL string) ([]models.Episode, error) {
-	return a.client.GetAnimeEpisodes(animeURL)
-}
-
-func (a *NineAnimeAdapter) GetStreamURL(episodeURL string, options ...any) (string, map[string]string, error) {
-	// episodeURL contains the episode data-id for 9anime
-	// options[0] = audio preference ("sub" or "dub")
-	return a.client.GetStreamURL(episodeURL, options...)
-}
-
-func (a *NineAnimeAdapter) GetType() ScraperType {
-	return NineAnimeType
-}
-
-// GetClient returns the underlying NineAnime client for direct access
-func (a *NineAnimeAdapter) GetClient() *NineAnimeClient {
-	return a.client
 }
 
 // GoyabuAdapter adapts GoyabuClient to UnifiedScraper interface

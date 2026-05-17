@@ -174,19 +174,15 @@ func TestEnrichTimeoutWithProbe_NilErrorIsNoop(t *testing.T) {
 	assert.NoError(t, got, "must not synthesise an error from nil")
 }
 
-func TestScraperManager_BaseURLForFlixHQFamily(t *testing.T) {
-	// Pin the source→URL mapping. If anyone renames a base URL constant
-	// without updating the lookup, this test fails and signals the probe
-	// has gone blind for that source.
+func TestScraperManager_BaseURLForKnownTypes(t *testing.T) {
+	// After SFlix/NineAnime/AnimeDrive removal, getScraperBaseURL returns
+	// empty for every type — homepage probes are no longer performed.
 	sm := &ScraperManager{}
 
-	assert.Equal(t, SFlixBase, sm.getScraperBaseURL(SFlixType))
-	assert.Equal(t, NineAnimeBase, sm.getScraperBaseURL(NineAnimeType))
-
 	assert.Empty(t, sm.getScraperBaseURL(AllAnimeType),
-		"AllAnime uses a GraphQL endpoint, not a probable HTML root — "+
-			"keep it empty so we don't probe nonsense")
+		"AllAnime uses a GraphQL endpoint, not a probable HTML root")
 	assert.Empty(t, sm.getScraperBaseURL(GoyabuType),
-		"Goyabu serves challenge pages on its homepage, so probing it "+
-			"would produce a confusing status — keep empty")
+		"Goyabu serves challenge pages on its homepage")
+	assert.Empty(t, sm.getScraperBaseURL(AnimefireType))
+	assert.Empty(t, sm.getScraperBaseURL(SuperFlixType))
 }
