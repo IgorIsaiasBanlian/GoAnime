@@ -626,6 +626,12 @@ func TestHandleBatchDownloadRange_AllEpisodesMissingFromList(t *testing.T) {
 }
 
 func TestHandleExistingEpisodes_WithDownloadedFilesEntersFuzzyFinder(t *testing.T) {
+	// handleExistingEpisodes opens an interactive fuzzy finder. Outside a TTY
+	// it errors on Linux but blocks indefinitely on Windows (tcell winTty
+	// getConsoleInput syscall), which deadlocks CI. Skip when no TTY.
+	if os.Getenv("CI") != "" {
+		t.Skip("Skipping interactive fuzzy-finder test in CI (no TTY available)")
+	}
 	SetAnimeName("HandleExistingDownloadedTest", 1)
 	t.Cleanup(func() { SetAnimeName("", 0) })
 
@@ -646,6 +652,12 @@ func TestHandleExistingEpisodes_WithDownloadedFilesEntersFuzzyFinder(t *testing.
 }
 
 func TestAskAndPlayDownloadedEpisode_WithDownloadedFilesEntersFuzzyFinder(t *testing.T) {
+	// askAndPlayDownloadedEpisode opens an interactive fuzzy finder. Outside a
+	// TTY it errors on Linux but blocks indefinitely on Windows (tcell winTty
+	// getConsoleInput syscall), which deadlocks CI. Skip when no TTY.
+	if os.Getenv("CI") != "" {
+		t.Skip("Skipping interactive fuzzy-finder test in CI (no TTY available)")
+	}
 	SetAnimeName("AskAndPlayDownloadedExistingTest", 1)
 	t.Cleanup(func() { SetAnimeName("", 0) })
 
