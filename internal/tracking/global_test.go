@@ -31,9 +31,13 @@ func TestGetGlobalTracker_NilWhenUninitialized(t *testing.T) {
 
 func TestGetGlobalTracker_ReturnsCachedAfterNewLocalTracker(t *testing.T) {
 	resetGlobalTracker(t)
+
+	// t.TempDir() registers its RemoveAll cleanup first; register the tracker
+	// reset (which closes the SQLite handle) afterwards so LIFO order closes
+	// the DB before Windows tries to unlink the still-open file.
+	dbPath := filepath.Join(t.TempDir(), "tracker.db")
 	t.Cleanup(func() { resetGlobalTracker(t) })
 
-	dbPath := filepath.Join(t.TempDir(), "tracker.db")
 	tr := NewLocalTracker(dbPath)
 	if tr == nil {
 		t.Skip("tracking unavailable (CGO/SQLite not enabled)")
@@ -69,9 +73,12 @@ func TestCloseGlobalTracker_ClearsCache(t *testing.T) {
 
 func TestNewLocalTracker_SamePathReturnsCachedSingleton(t *testing.T) {
 	resetGlobalTracker(t)
+
+	// Register TempDir cleanup before the tracker reset so the SQLite handle
+	// is closed (LIFO) before Windows unlinks the DB file.
+	dbPath := filepath.Join(t.TempDir(), "tracker.db")
 	t.Cleanup(func() { resetGlobalTracker(t) })
 
-	dbPath := filepath.Join(t.TempDir(), "tracker.db")
 	tr1 := NewLocalTracker(dbPath)
 	if tr1 == nil {
 		t.Skip("tracking unavailable (CGO/SQLite not enabled)")

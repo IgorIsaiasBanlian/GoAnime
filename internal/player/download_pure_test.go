@@ -583,6 +583,12 @@ func TestHandleBatchDownload_NoTTYErrorsOnRangePrompt(t *testing.T) {
 }
 
 func TestHandleBatchDownloadRange_AllEpisodesAlreadyDownloaded(t *testing.T) {
+	// handleExistingEpisodes opens an interactive fuzzy finder. Outside a TTY
+	// it errors on Linux but blocks indefinitely on Windows (tcell winTty
+	// getConsoleInput syscall), which deadlocks CI. Skip when no TTY.
+	if os.Getenv("CI") != "" {
+		t.Skip("Skipping interactive fuzzy-finder test in CI (no TTY available)")
+	}
 	util.InitLogger()
 	SetAnimeName("HandleBatchRangeAllExistingTest", 1)
 	t.Cleanup(func() { SetAnimeName("", 0) })
