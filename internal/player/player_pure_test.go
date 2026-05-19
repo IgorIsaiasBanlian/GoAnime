@@ -200,11 +200,23 @@ func TestHandleUpscaleFromMenu_DoesNotPanic(t *testing.T) {
 }
 
 func TestAskForDownload_ReturnsValidMarker(t *testing.T) {
+	// askForDownload opens an interactive fuzzy finder. Outside a TTY it
+	// errors on Linux but blocks indefinitely on Windows (tcell winTty
+	// getConsoleInput syscall), which deadlocks CI. Skip when no TTY.
+	if os.Getenv("CI") != "" {
+		t.Skip("Skipping interactive fuzzy-finder test in CI (no TTY available)")
+	}
 	got := askForDownload()
 	assert.GreaterOrEqual(t, got, 1)
 }
 
 func TestAskForPlayOffline_DoesNotPanic(t *testing.T) {
+	// askForPlayOffline opens an interactive fuzzy finder. Outside a TTY it
+	// errors on Linux but blocks indefinitely on Windows (tcell winTty
+	// getConsoleInput syscall), which deadlocks CI. Skip when no TTY.
+	if os.Getenv("CI") != "" {
+		t.Skip("Skipping interactive fuzzy-finder test in CI (no TTY available)")
+	}
 	assert.NotPanics(t, func() { _ = askForPlayOffline() })
 }
 
