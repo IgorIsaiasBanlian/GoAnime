@@ -302,37 +302,3 @@ func (p *superFlixProvider) FetchStreamURL(_ context.Context, episode *models.Ep
 	return url, nil
 }
 
-// --- AnimeDrive Provider ---
-
-type animeDriveProvider struct {
-	sm *scraper.ScraperManager
-}
-
-func init() {
-	RegisterProvider(source.AnimeDrive, func(sm *scraper.ScraperManager) Provider {
-		return &animeDriveProvider{sm: sm}
-	})
-}
-
-func (p *animeDriveProvider) Kind() source.SourceKind { return source.AnimeDrive }
-func (p *animeDriveProvider) HasSeasons() bool        { return false }
-
-func (p *animeDriveProvider) FetchEpisodes(_ context.Context, anime *models.Anime) ([]models.Episode, error) {
-	adapter, err := p.sm.GetScraper(scraper.AnimeDriveType)
-	if err != nil {
-		return nil, err
-	}
-	return adapter.GetAnimeEpisodes(anime.URL)
-}
-
-func (p *animeDriveProvider) FetchStreamURL(_ context.Context, episode *models.Episode, anime *models.Anime, quality string) (string, error) {
-	adapter, err := p.sm.GetScraper(scraper.AnimeDriveType)
-	if err != nil {
-		return "", err
-	}
-	url, _, err := adapter.GetStreamURL(episode.URL, "auto")
-	if err != nil {
-		return "", fmt.Errorf("animeDrive stream: %w", err)
-	}
-	return url, nil
-}

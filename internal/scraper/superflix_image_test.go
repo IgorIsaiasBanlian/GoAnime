@@ -475,6 +475,7 @@ func TestGetStreamURL_ThumbNormalizationFlow(t *testing.T) {
 // =============================================================================
 
 func TestSuperFlix_RealSearch_ImageExtraction(t *testing.T) {
+	skipInCI(t)
 	if testing.Short() {
 		t.Skip("Skipping integration test that hits real SuperFlix API")
 	}
@@ -521,6 +522,7 @@ func TestSuperFlix_RealSearch_ImageExtraction(t *testing.T) {
 
 // TestSuperFlix_RealSearch_ImageURLIsAccessible verifies the normalized URLs actually load
 func TestSuperFlix_RealSearch_ImageURLIsAccessible(t *testing.T) {
+	skipInCI(t)
 	if testing.Short() {
 		t.Skip("Skipping integration test that hits real APIs")
 	}

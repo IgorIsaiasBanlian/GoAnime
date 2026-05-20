@@ -6,17 +6,6 @@ import (
 	"github.com/alvarorichard/Goanime/internal/models"
 )
 
-// skipIfTempDisabled skips a sub-test whose expected kind is one of the
-// providers temporarily disabled in definition.go. Restore the call sites
-// (or remove this helper) when those sourceDefs entries are re-enabled.
-func skipIfTempDisabled(t *testing.T, kind SourceKind) {
-	t.Helper()
-	switch kind {
-	case FlixHQ, SFlix, NineAnime:
-		t.Skipf("TEMP-DISABLED: %s source is commented out in sourceDefs", kind)
-	}
-}
-
 func TestResolve_ExplicitSource(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -26,16 +15,11 @@ func TestResolve_ExplicitSource(t *testing.T) {
 		{"AllAnime", "AllAnime", AllAnime},
 		{"AnimeFire via Animefire.io", "Animefire.io", AnimeFire},
 		{"AnimeFire direct", "AnimeFire", AnimeFire},
-		{"FlixHQ", "FlixHQ", FlixHQ},
-		{"SFlix", "SFlix", SFlix},
-		{"9Anime", "9Anime", NineAnime},
-		{"AnimeDrive", "AnimeDrive", AnimeDrive},
 		{"Goyabu", "Goyabu", Goyabu},
 		{"SuperFlix", "SuperFlix", SuperFlix},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			skipIfTempDisabled(t, tt.wantKind)
 			anime := &models.Anime{Source: tt.source}
 			got := Resolve(anime)
 			if got.Kind != tt.wantKind {
@@ -46,35 +30,13 @@ func TestResolve_ExplicitSource(t *testing.T) {
 }
 
 func TestResolve_ExplicitSourceTrumpsURL(t *testing.T) {
-	skipIfTempDisabled(t, NineAnime)
 	anime := &models.Anime{
-		Source: "9Anime",
+		Source: "Goyabu",
 		URL:    "https://animefire.plus/something",
 	}
 	got := Resolve(anime)
-	if got.Kind != NineAnime {
+	if got.Kind != Goyabu {
 		t.Errorf("explicit Source should win over URL, got %s (%s)", got.Kind, got.Reason)
-	}
-}
-
-func TestResolve_MediaType(t *testing.T) {
-	tests := []struct {
-		name      string
-		mediaType models.MediaType
-		wantKind  SourceKind
-	}{
-		{"movie", models.MediaTypeMovie, FlixHQ},
-		{"tv", models.MediaTypeTV, FlixHQ},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			skipIfTempDisabled(t, tt.wantKind)
-			anime := &models.Anime{MediaType: tt.mediaType}
-			got := Resolve(anime)
-			if got.Kind != tt.wantKind {
-				t.Errorf("Resolve(MediaType=%s) = %s, want %s", tt.mediaType, got.Kind, tt.wantKind)
-			}
-		})
 	}
 }
 
@@ -86,19 +48,11 @@ func TestResolve_NameTags(t *testing.T) {
 	}{
 		{"english tag", "Naruto [English]", AllAnime},
 		{"animefire tag", "Naruto [AnimeFire]", AnimeFire},
-		{"animedrive tag", "Naruto [AnimeDrive]", AnimeDrive},
 		{"goyabu tag", "Naruto [Goyabu]", Goyabu},
 		{"superflix tag", "Naruto [SuperFlix]", SuperFlix},
-		{"9anime tag", "Naruto [9Anime]", NineAnime},
-		{"multilanguage tag", "Naruto [Multilanguage]", NineAnime},
-		{"movie tag", "Inception [Movie]", FlixHQ},
-		{"tv tag", "Breaking Bad [TV]", FlixHQ},
-		{"flixhq tag", "Movie [FlixHQ]", FlixHQ},
-		{"sflix tag", "Movie [SFlix]", SFlix},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			skipIfTempDisabled(t, tt.wantKind)
 			anime := &models.Anime{Name: tt.animName}
 			got := Resolve(anime)
 			if got.Kind != tt.wantKind {
@@ -114,34 +68,19 @@ func TestResolve_URLPatterns(t *testing.T) {
 		url      string
 		wantKind SourceKind
 	}{
-		{"animesdrive URL", "https://animesdrive.blog/naruto", AnimeDrive},
 		{"animefire URL", "https://animefire.plus/naruto", AnimeFire},
 		{"goyabu URL", "https://goyabu.to/naruto", Goyabu},
 		{"allanime URL", "https://allanime.to/anime/abc", AllAnime},
-		{"flixhq URL", "https://flixhq.to/movie/inception", FlixHQ},
-		{"sflix URL", "https://sflix.to/movie/inception", SFlix},
-		{"9anime URL", "https://9anime.to/watch/naruto", NineAnime},
 		{"superflix URL", "https://superflix.to/naruto", SuperFlix},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			skipIfTempDisabled(t, tt.wantKind)
 			anime := &models.Anime{URL: tt.url}
 			got := Resolve(anime)
 			if got.Kind != tt.wantKind {
 				t.Errorf("Resolve(URL=%q) = %s (%s), want %s", tt.url, got.Kind, got.Reason, tt.wantKind)
 			}
 		})
-	}
-}
-
-func TestResolve_AnimeDriveNotConfusedWithAllAnime(t *testing.T) {
-	// This is the latent bug in the current codebase:
-	// animesdrive URL must resolve to AnimeDrive, not AllAnime.
-	anime := &models.Anime{URL: "https://animesdrive.blog/ep/naruto-1"}
-	got := Resolve(anime)
-	if got.Kind != AnimeDrive {
-		t.Errorf("animesdrive should resolve to AnimeDrive, got %s (%s)", got.Kind, got.Reason)
 	}
 }
 
@@ -166,7 +105,6 @@ func TestResolve_ShortID(t *testing.T) {
 }
 
 func TestResolve_NumericOnlyIsNotShortID(t *testing.T) {
-	// Purely numeric strings are NOT AllAnime short IDs.
 	anime := &models.Anime{URL: "8143"}
 	got := Resolve(anime)
 	if got.Kind == AllAnime && got.Reason == "short ID" {
@@ -202,9 +140,9 @@ func TestResolve_BestEffortKind(t *testing.T) {
 		t.Errorf("BestEffortKind for Unknown should be AllAnime, got %s", r.BestEffortKind())
 	}
 
-	r2 := ResolvedSource{Kind: FlixHQ, Reason: "test"}
-	if r2.BestEffortKind() != FlixHQ {
-		t.Errorf("BestEffortKind for FlixHQ should be FlixHQ, got %s", r2.BestEffortKind())
+	r2 := ResolvedSource{Kind: Goyabu, Reason: "test"}
+	if r2.BestEffortKind() != Goyabu {
+		t.Errorf("BestEffortKind for Goyabu should be Goyabu, got %s", r2.BestEffortKind())
 	}
 }
 
@@ -215,7 +153,6 @@ func TestResolveURL(t *testing.T) {
 		wantKind SourceKind
 	}{
 		{"animefire", "https://animefire.plus/ep/naruto-1", AnimeFire},
-		{"animesdrive", "https://animesdrive.blog/ep/naruto", AnimeDrive},
 		{"goyabu", "https://goyabu.to/ep/naruto-1", Goyabu},
 		{"allanime", "https://allanime.to/anime/hHjXnUTda", AllAnime},
 		{"short ID", "hHjXnUTda", AllAnime},
@@ -244,8 +181,8 @@ func TestIsAllAnimeShortID(t *testing.T) {
 		{"", false},
 		{"https://example.com", false},
 		{"a/b", false},
-		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false}, // 31 chars
-		{"abc def", false},                         // space
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false},
+		{"abc def", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -263,7 +200,7 @@ func TestExtractAllAnimeID(t *testing.T) {
 	}{
 		{"hHjXnUTda", "hHjXnUTda"},
 		{"https://allanime.to/anime/hHjXnUTda", "hHjXnUTda"},
-		{"https://example.com/8143", "https://example.com/8143"}, // numeric-only not extracted
+		{"https://example.com/8143", "https://example.com/8143"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -279,7 +216,7 @@ func TestScraperTypeFor(t *testing.T) {
 	if !ok {
 		t.Fatal("ScraperTypeFor(AllAnime) should return true")
 	}
-	if st != 0 { // AllAnimeType = iota = 0
+	if st != 0 {
 		t.Errorf("ScraperTypeFor(AllAnime) = %d, want 0", st)
 	}
 

@@ -107,7 +107,7 @@ func TestEnrichTimeoutWithProbe_UpgradesCloudflare522(t *testing.T) {
 	defer srv.Close()
 
 	original := fmt.Errorf("search timed out after 12s")
-	got := EnrichTimeoutWithProbe(context.Background(), "FlixHQ", "search",
+	got := EnrichTimeoutWithProbe(context.Background(), "SFlix", "search",
 		srv.URL, original, 2*time.Second)
 
 	require.NotNil(t, got)
@@ -132,7 +132,7 @@ func TestEnrichTimeoutWithProbe_KeepsOriginalWhenUpstreamUnreachable(t *testing.
 	srv.Close()
 
 	original := fmt.Errorf("search timed out after 12s")
-	got := EnrichTimeoutWithProbe(context.Background(), "FlixHQ", "search",
+	got := EnrichTimeoutWithProbe(context.Background(), "SFlix", "search",
 		url, original, 500*time.Millisecond)
 
 	assert.Same(t, original, got,
@@ -148,7 +148,7 @@ func TestEnrichTimeoutWithProbe_KeepsOriginalWhenUpstreamHealthy(t *testing.T) {
 	defer srv.Close()
 
 	original := fmt.Errorf("search timed out after 12s")
-	got := EnrichTimeoutWithProbe(context.Background(), "FlixHQ", "search",
+	got := EnrichTimeoutWithProbe(context.Background(), "SFlix", "search",
 		srv.URL, original, 1*time.Second)
 
 	assert.Same(t, original, got,
@@ -169,25 +169,20 @@ func TestEnrichTimeoutWithProbe_KeepsOriginalWhenBaseURLEmpty(t *testing.T) {
 }
 
 func TestEnrichTimeoutWithProbe_NilErrorIsNoop(t *testing.T) {
-	got := EnrichTimeoutWithProbe(context.Background(), "FlixHQ", "search",
+	got := EnrichTimeoutWithProbe(context.Background(), "SFlix", "search",
 		"http://example.invalid", nil, 1*time.Second)
 	assert.NoError(t, got, "must not synthesise an error from nil")
 }
 
-func TestScraperManager_BaseURLForFlixHQFamily(t *testing.T) {
-	// Pin the source→URL mapping. If anyone renames a base URL constant
-	// without updating the lookup, this test fails and signals the probe
-	// has gone blind for that source.
+func TestScraperManager_BaseURLForKnownTypes(t *testing.T) {
+	// After SFlix/NineAnime/AnimeDrive removal, getScraperBaseURL returns
+	// empty for every type — homepage probes are no longer performed.
 	sm := &ScraperManager{}
 
-	assert.Equal(t, FlixHQBase, sm.getScraperBaseURL(FlixHQType))
-	assert.Equal(t, SFlixBase, sm.getScraperBaseURL(SFlixType))
-	assert.Equal(t, NineAnimeBase, sm.getScraperBaseURL(NineAnimeType))
-
 	assert.Empty(t, sm.getScraperBaseURL(AllAnimeType),
-		"AllAnime uses a GraphQL endpoint, not a probable HTML root — "+
-			"keep it empty so we don't probe nonsense")
+		"AllAnime uses a GraphQL endpoint, not a probable HTML root")
 	assert.Empty(t, sm.getScraperBaseURL(GoyabuType),
-		"Goyabu serves challenge pages on its homepage, so probing it "+
-			"would produce a confusing status — keep empty")
+		"Goyabu serves challenge pages on its homepage")
+	assert.Empty(t, sm.getScraperBaseURL(AnimefireType))
+	assert.Empty(t, sm.getScraperBaseURL(SuperFlixType))
 }
